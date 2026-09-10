@@ -1,0 +1,59 @@
+{
+  "СМУ": {
+    "name": "Стальметурал",
+    "site": "stalmetural.ru",
+    "email": "info@stalmetural.ru",
+    "phone": "+7 (499) 130-36-69",
+    "required_hashtags_shipment": ["#Отгрузка_СМУ", "#Стальметурал", "#СМУ", "#Металлопрокат"],
+    "telegram": {"clients": "stalmetural", "staff": "SMUdaily"},
+    "vk_group_id": "-217668235",
+    "ok_group_id": "70000004574376",
+    "max_channel_id": "-70916890460398"
+  },
+  "ИМП": {
+    "name": "Инметпром",
+    "site": "inmetprom.ru",
+    "email": "info@inmetprom.ru",
+    "phone": "+7 (495) 755-36-28",
+    "required_hashtags_shipment": ["#МЕТАЛЛОПРОКАТ", "#ИНМЕТПРОМ", "#ИМП"],
+    "telegram": {"clients": "inmetprom", "staff": "inmetprom"},
+    "vk_group_id": "-224708116",
+    "ok_group_id": "70000005388115",
+    "max_channel_id": "-70917002032627"
+  },
+  "МПЭ": {
+    "name": "Метпромэнерго",
+    "aliases": ["Метпромэнерго", "МЕПЭН"],
+    "site": "mepen.ru",
+    "email": "info@mepen.ru",
+    "phone": "+7 (495) 799-14-38",
+    "required_hashtags_shipment": ["#Отгрузка_МПЭ", "#Метпромэнерго", "#МПЭ"],
+    "telegram": {"clients": "metpromenergo", "staff": "metpromenergo"},
+    "vk_group_id": "-233397949",
+    "ok_group_id": "70000042911963",
+    "max_channel_id": "-71839887647351"
+  },
+  "АПС": {
+    "name": "Авиапромсталь",
+    "site": "aviastal.ru",
+    "email": "",
+    "phone": "+7 (495) 755-36-18",
+    "required_hashtags_shipment": ["#Авиапромсталь"],
+    "telegram": {"clients": "aviapromstal_ekb", "staff": "aviapromstal_ekb"},
+    "vk_group_id": "-214715361",
+    "ok_group_id": "70000048012012",
+    "max_channel_id": "-77624664889942"
+  },
+  "МПИ": {
+    "name": "МетПромИнтекс",
+    "site": "metpromintex.ru",
+    "email": "info@metpromintex.ru",
+    "phone": "+7 (351) 223-68-30",
+    "required_hashtags_shipment": ["#МетПромИнтекс", "#МПИ"],
+    "first_hashtag_must_be": "#МетПромИнтекс",
+    "telegram": {"clients": "metpromintex", "staff": "metpromintex"},
+    "vk_group_id": "-217252669",
+    "ok_group_id": "70000052513823",
+    "max_channel_id": "-77527437957292"
+  }
+}

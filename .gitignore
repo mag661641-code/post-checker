@@ -1,0 +1,21 @@
+# Секреты и ключи
+.streamlit/secrets.toml
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+.pytest_cache/
+*.egg-info/
+
+# Временные файлы
+_inspect*.txt
+_smoke.txt
+_acc.txt
+~$*.xlsx
+
+# ОС
+.DS_Store
+Thumbs.db

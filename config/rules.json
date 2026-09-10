@@ -1,0 +1,93 @@
+{
+  "toggles": {
+    "registry_empty_fields": true,
+    "registry_bad_date": true,
+    "registry_pub_before_write": true,
+    "registry_posted_future": true,
+    "registry_ready_past": true,
+    "registry_posted_private_link": true,
+    "registry_duplicate_links": true,
+    "registry_wrong_brand_link": true,
+    "registry_missing_platforms": true,
+    "registry_unknown_domain": true,
+    "registry_post_type_spelling": true,
+    "text_contacts_present": true,
+    "text_other_brand_contacts": true,
+    "text_other_brand_name": true,
+    "text_required_hashtags": true,
+    "text_mpi_first_hashtag": true,
+    "text_repeated_hashtag": true,
+    "text_weird_hashtag": true,
+    "text_placeholders": true,
+    "text_prompt_leftovers": true,
+    "text_markdown_stars": true,
+    "text_long_dashes": true,
+    "text_colon_in_list": true,
+    "text_whitespace": true,
+    "text_doubled_letter": true,
+    "text_doubled_word": true,
+    "text_mixed_quotes": true,
+    "text_hard_wraps": true,
+    "text_spelling": false,
+    "text_telegram_length": true,
+    "text_link_domain": true,
+    "text_info_needs_link": true,
+    "text_photo_empty": true,
+    "text_photo_filename": true
+  },
+  "post_type_canonical": {
+    "Информационный": ["Информативный", "Информативый", "Информацион", "Инфо"],
+    "Спецпредложение": ["Спец предложение", "Спец-предложение", "Спецпредложения"],
+    "Поздравление": ["Поздравление (клиенты)", "Поздравление(клиенты)", "Поздравления"],
+    "Праздник": ["Праздники"],
+    "Отгрузка": ["Отгрузки", "Отгрузка "],
+    "Анонс": ["Анонсы"],
+    "Развлекательный": ["Развлекательное", "Развлекательные"],
+    "Дзен": ["Статья Дзен", "Дзен статья"]
+  },
+  "social_canonical": {
+    "Telegram": ["Telegram (клиент)", "Telegram (клиенты)", "Telegram(клиент)", "ТГ", "телеграм", "Telegram "],
+    "Telegram (сотрудники)": ["Telegram(сотрудники)", "ТГ сотрудники"],
+    "Одноклассники": ["Однокласники", "Однокласники ", "Одноклассники ", "ОК", "ok"],
+    "ВКонтакте": ["Вконтакте", "ВК", "vk", "вконтакте"],
+    "Max": ["МАКС", "Макс", "макс", "MAX", "max"],
+    "YouTube": ["Youtube", "youtube", "ютуб"],
+    "Дзен": ["Zen", "дзен", "Yandex Zen"]
+  },
+  "expected_platforms": {
+    "default": ["Telegram", "Одноклассники", "ВКонтакте", "Max"],
+    "by_brand_type": {
+      "СМУ|Развлекательный": ["Telegram (сотрудники)"],
+      "*|Дзен": ["Дзен"]
+    }
+  },
+  "contacts_not_required_types": ["Праздник", "Поздравление"],
+  "list_colon_brands": ["МПЭ", "АПС", "МПИ"],
+  "list_bullet_markers": ["•", "🔹", "🔸", "✅", "📌", "→", "-", "♦️", "▪️", "◾"],
+  "thresholds": {
+    "long_dash_max": 3,
+    "max_blank_lines": 2,
+    "telegram_caption_limit": 1024,
+    "telegram_message_limit": 4096,
+    "holiday_window_days": 3,
+    "online_similarity_threshold": 85
+  },
+  "known_domains": [
+    "t.me", "telegram.me", "vk.com", "vk.ru", "m.vk.com", "ok.ru", "m.ok.ru",
+    "dzen.ru", "max.ru", "ibb.co", "i.ibb.co", "drive.google.com",
+    "stalmetural.ru", "inmetprom.ru", "mepen.ru", "aviastal.ru", "metpromintex.ru"
+  ],
+  "placeholder_pattern": "\\[[^\\]]+\\]",
+  "prompt_leftover_phrases": [
+    "Далее пример поста", "Текст примера", "Сохрани смысловые блоки",
+    "Пиши естественным", "Нижний блок", "оставь без изменений",
+    "оставь без изменения", "пример поста", "смысловые блоки",
+    "напиши пост", "сгенерируй", "в качестве примера"
+  ],
+  "online": {
+    "timeout_seconds": 10,
+    "pause_seconds": 1.0,
+    "vk_api_version": "5.199",
+    "cache_ttl_seconds": 3600
+  }
+}
