@@ -34,41 +34,24 @@ def _source() -> None:
     src = config_mod.load_source()
     sa = C.get_service_account()
 
-    st.subheader("Подключение к Google-таблице")
+    st.subheader("Ссылка на Google-таблицу")
 
-    method_labels = {"service_account": "Сервисный аккаунт (рекомендуется)",
-                     "public": "Публичная ссылка"}
-    cur_method = src.get("method", "service_account")
-    method = st.radio("Способ подключения", list(method_labels.keys()),
-                      index=list(method_labels.keys()).index(cur_method),
-                      format_func=lambda k: method_labels[k], key="src_method")
-    if method == "public":
-        st.warning("Таблица будет доступна всем, у кого есть ссылка. "
-                   "В реестре есть внутренние ссылки и имена сотрудников.")
-
-    url = st.text_input("Ссылка на Google-таблицу", value=src.get("url", ""),
-                        key="src_url",
+    url = st.text_input("Ссылка на таблицу «РРП. Реестр постов/отгрузок»",
+                        value=src.get("url", ""), key="src_url",
                         placeholder="https://docs.google.com/spreadsheets/d/…")
 
-    # статус сервисного аккаунта
-    if sa:
-        st.success(f"Ключ сервисного аккаунта добавлен, адрес: {gsheets.sa_email(sa)}")
-    else:
-        st.error("Ключ сервисного аккаунта не добавлен. См. инструкцию в README.")
-
-    # статус таблицы настроек
-    try:
-        settings_url = st.secrets.get("settings_sheet_url")  # type: ignore
-    except Exception:  # noqa: BLE001
-        settings_url = None
-    st.caption("Таблица настроек: "
-               + ("подключена" if settings_url else "не подключена — "
-                  "настройки хранятся до перезапуска, скачивайте резервную копию"))
-
-    if st.button("Проверить подключение", type="primary", key="src_test"):
+    c1, c2 = st.columns([1, 1])
+    if c1.button("💾 Сохранить", key="src_save", type="primary"):
+        config_mod.save_source({"method": "service_account",
+                                "url": url.strip(), "refresh_minutes": 0,
+                                "gids": {}})
+        C.clear_source_cache()
+        st.toast("Ссылка сохранена")
+        st.rerun()
+    if c2.button("Проверить подключение", key="src_test"):
         expected = [loader_mod.REGISTRY_SHEET] + loader_mod.BRAND_SHEETS
         with st.spinner("Проверяем…"):
-            res = gsheets.test_connection(url, method, sa, expected)
+            res = gsheets.test_connection(url, "service_account", sa, expected)
         if res["ok"]:
             parts = ", ".join(f"{s['title']} — {s['rows']} строк"
                               for s in res["sheets"][:6] if s.get("rows"))
@@ -79,38 +62,8 @@ def _source() -> None:
             if res["error"] == "no_access" and res.get("sa_email"):
                 st.code(res["sa_email"], language=None)
 
-    st.caption("Данные загружаются при открытии сервиса. Чтобы подтянуть свежие "
-               "правки из таблицы, нажмите «🔄 Обновить данные» в панели слева.")
-
-    with st.expander("Расширенные настройки: листы и колонки таблицы",
-                     expanded=False):
-        st.caption("Нужно, только если в таблице переименовали лист или колонку.")
-        gids = src.get("gids", {})
-        rows = [{"Лист": k, "gid": v} for k, v in gids.items()]
-        st.caption("gid листов (для ссылок «Открыть в таблице» при публичной "
-                   "ссылке). При сервисном аккаунте определяются автоматически.")
-        edited = st.data_editor(pd.DataFrame(rows or [{"Лист": "", "gid": ""}]),
-                                num_rows="dynamic", use_container_width=True,
-                                hide_index=True, key="src_gids")
-
-    c1, c2 = st.columns([1, 1])
-    if c1.button("💾 Сохранить", key="src_save", type="primary"):
-        new_gids = {}
-        try:
-            for _, r in edited.iterrows():
-                if str(r.get("Лист", "")).strip():
-                    new_gids[str(r["Лист"]).strip()] = str(r.get("gid", "")).strip()
-        except Exception:  # noqa: BLE001
-            new_gids = gids
-        config_mod.save_source({
-            "method": method, "url": url.strip(),
-            "refresh_minutes": 0, "gids": new_gids,   # 0 = только вручную
-        })
-        C.clear_source_cache()
-        st.toast("Настройки сохранены")
-        st.rerun()
-    if c2.button("Отменить изменения", key="src_cancel"):
-        st.rerun()
+    st.caption("Свежие правки из таблицы подтягиваются кнопкой «🔄 Обновить "
+               "данные» в панели слева.")
 
 
 def _clear_caches() -> None:
