@@ -21,7 +21,7 @@ SOURCE_PATH = CONFIG_DIR / "source.json"
 _SOURCE_DEFAULT = {
     "method": "service_account",   # service_account | public
     "url": "",
-    "refresh_minutes": 10,
+    "refresh_minutes": 0,          # 0 = обновлять только вручную
     "gids": {},                    # название листа -> gid (для публичной ссылки)
 }
 

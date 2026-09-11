@@ -30,10 +30,6 @@ def render() -> None:
         _thresholds()
 
 
-_REFRESH_OPTIONS = {"5 мин": 5, "10 мин": 10, "30 мин": 30, "1 час": 60,
-                    "Только вручную": 0}
-
-
 def _source() -> None:
     src = config_mod.load_source()
     sa = C.get_service_account()
@@ -83,11 +79,8 @@ def _source() -> None:
             if res["error"] == "no_access" and res.get("sa_email"):
                 st.code(res["sa_email"], language=None)
 
-    refresh_label = next((k for k, v in _REFRESH_OPTIONS.items()
-                          if v == src.get("refresh_minutes", 10)), "10 мин")
-    chosen = st.select_slider("Автообновление данных",
-                              options=list(_REFRESH_OPTIONS.keys()),
-                              value=refresh_label, key="src_refresh")
+    st.caption("Данные загружаются при открытии сервиса. Чтобы подтянуть свежие "
+               "правки из таблицы, нажмите «🔄 Обновить данные» в панели слева.")
 
     with st.expander("Расширенные настройки: листы и колонки таблицы",
                      expanded=False):
@@ -111,7 +104,7 @@ def _source() -> None:
             new_gids = gids
         config_mod.save_source({
             "method": method, "url": url.strip(),
-            "refresh_minutes": _REFRESH_OPTIONS[chosen], "gids": new_gids,
+            "refresh_minutes": 0, "gids": new_gids,   # 0 = только вручную
         })
         st.session_state.pop("source_cache", None)
         st.toast("Настройки сохранены")
