@@ -344,14 +344,14 @@ def _issue_list(data: C.AppData, post: PostRecord, issues: list[Issue]) -> None:
                     if st.button("Добавить слово", key=f"wl_{post.row}_{n}_{iss.code}",
                                  help="Добавить в словарь орфографии"):
                         config_mod.add_word_to_whitelist(iss.extra.get("word", ""))
-                        C.cached_spell.clear()
+                        C.persist_all()
                         st.rerun()
                 else:
                     if st.button("Не ошибка",
                                  key=f"ig_{post.row}_{n}_{iss.code}",
                                  help="Скрыть это замечание"):
                         config_mod.add_ignored(iss.sheet, iss.row, iss.code)
-                        C.cached_base_checks.clear()
+                        C.persist_all()
                         st.rerun()
 
 

@@ -137,6 +137,76 @@ def get_config() -> dict:
     return config_mod.load_all()
 
 
+# ---------------------------------------------------------------------------
+# Хранение настроек в отдельной Google-таблице
+# ---------------------------------------------------------------------------
+def settings_url() -> Optional[str]:
+    try:
+        return st.secrets.get("settings_sheet_url")  # type: ignore
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def settings_status() -> tuple[bool, str]:
+    """(сохраняются_ли_постоянно, текст статуса)."""
+    if settings_url() and get_service_account():
+        return True, ("✅ Настройки сохраняются в Google-таблицу «Настройки "
+                      "проверки постов»")
+    return False, ("⚠️ Настройки сохраняются только до перезапуска сервиса. "
+                   "Подключите таблицу настроек или скачивайте резервную копию")
+
+
+def pull_settings() -> None:
+    """Один раз за сессию подтянуть настройки из таблицы в config-файлы."""
+    if st.session_state.get("_settings_pulled"):
+        return
+    st.session_state["_settings_pulled"] = True
+    url, sa = settings_url(), get_service_account()
+    if not url or not sa:
+        return
+    try:
+        from checker import settings_store
+        bundle = settings_store.read_bundle(url, sa)
+    except Exception:  # noqa: BLE001
+        return
+    if not bundle:
+        return
+    if "brands" in bundle:
+        config_mod.save_brands(bundle["brands"])
+    if "rules" in bundle:
+        config_mod.save_rules(bundle["rules"])
+    if "whitelist" in bundle:
+        config_mod.save_whitelist(bundle["whitelist"])
+    if "ignored" in bundle:
+        config_mod.save_ignored(bundle["ignored"])
+    if "source" in bundle:
+        config_mod.save_source(bundle["source"])
+    cached_base_checks.clear()
+    cached_spell.clear()
+    clear_source_cache()
+
+
+def persist_all() -> bool:
+    """Сбросить кеши проверок и, если подключена таблица настроек, записать в неё."""
+    cached_base_checks.clear()
+    cached_spell.clear()
+    url, sa = settings_url(), get_service_account()
+    if not url or not sa:
+        return False
+    try:
+        from checker import settings_store
+        settings_store.write_bundle(url, sa, {
+            "brands": config_mod.load_brands(),
+            "rules": config_mod.load_rules(),
+            "whitelist": sorted(config_mod.load_whitelist()),
+            "ignored": config_mod.load_ignored(),
+            "source": config_mod.load_source(),
+        })
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def build_app_data(file_bytes: bytes) -> AppData:
     """Собрать всё необходимое для интерфейса. Тяжёлые проверки кешируются."""
     cfg = get_config()

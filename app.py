@@ -14,6 +14,9 @@ C.page_config()
 if not C.require_auth():
     st.stop()
 
+# --- подтянуть настройки из таблицы настроек (один раз за сессию) ---
+C.pull_settings()
+
 # --- боковая панель: название сервиса + источник данных ---
 file_bytes = C.sidebar()
 

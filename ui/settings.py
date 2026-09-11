@@ -13,6 +13,8 @@ from ui import common as C
 
 def render() -> None:
     st.title("Настройки")
+    persistent, status = C.settings_status()
+    (st.success if persistent else st.warning)(status)
 
     tabs = st.tabs(["🔗 Источник данных", "Бренды", "Типы постов и соцсети",
                     "Словарь орфографии", "Скрытые замечания", "Пороги и лимиты"])
@@ -46,6 +48,7 @@ def _source() -> None:
                                 "url": url.strip(), "refresh_minutes": 0,
                                 "gids": {}})
         C.clear_source_cache()
+        C.persist_all()
         st.toast("Ссылка сохранена")
         st.rerun()
     if c2.button("Проверить подключение", key="src_test"):
@@ -67,8 +70,8 @@ def _source() -> None:
 
 
 def _clear_caches() -> None:
-    C.cached_base_checks.clear()
-    C.cached_spell.clear()
+    # сбросить кеши и, если подключена таблица настроек, сохранить в неё
+    C.persist_all()
 
 
 import re
