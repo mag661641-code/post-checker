@@ -478,70 +478,69 @@ def _reset_period() -> None:
     st.session_state.pop("period_note", None)
 
 
-def fetch_source(force: bool = False) -> Optional[str]:
-    """Загрузить таблицу из источника в session_state. Вернуть текст ошибки или None."""
+@st.cache_data(show_spinner="Загружаем таблицу из Google…")
+def _load_table(url: str, method: str, gids_extra: tuple, _sa) -> dict:
+    """Скачать таблицу и метаданные. Кешируется, пока не нажали «Обновить»."""
     from checker import gsheets
+    if method == "public":
+        data = gsheets.download_public(url)
+        meta = {"title": "Google-таблица", "sheets": []}
+    else:
+        data = gsheets.download_service_account(url, _sa)
+        try:
+            meta = gsheets.get_metadata(url, _sa)
+        except Exception:  # noqa: BLE001
+            meta = {"title": "Google-таблица", "sheets": []}
+    gids = {s["title"]: s["gid"] for s in meta.get("sheets", [])
+            if s.get("gid") is not None}
+    gids.update({k: v for k, v in dict(gids_extra).items() if v})
+    return {
+        "bytes": data,
+        "title": meta.get("title") or "Google-таблица",
+        "gids": gids,
+        "id": gsheets.extract_sheet_id(url),
+        "at": dt.datetime.now(ZoneInfo("Europe/Moscow")).strftime("%H:%M"),
+    }
+
+
+def clear_source_cache() -> None:
+    _load_table.clear()
+
+
+def fetch_source(force: bool = False) -> Optional[str]:
+    """Загрузить таблицу (из кеша или заново). Вернуть текст ошибки или None."""
     src = config_mod.load_source()
-    url = src.get("url", "").strip()
+    url = (src.get("url") or "").strip()
     if not url:
         return None
-
-    cache = st.session_state.get("source_cache") or {}
-    ttl_min = src.get("refresh_minutes", 10) or 0
-    fresh = (cache.get("url") == url and cache.get("bytes") is not None)
-    if fresh and not force and ttl_min:
-        age = (dt.datetime.now() - cache["at"]).total_seconds() / 60
-        if age < ttl_min:
-            _apply_source_cache(cache)
-            return None
-    if fresh and not force and not ttl_min:
-        # «только вручную» — не перезагружать, пока не нажали обновить
-        _apply_source_cache(cache)
-        return None
-
+    method = src.get("method", "service_account")
     sa = get_service_account()
+    if method != "public" and not sa:
+        return "Ключ сервисного аккаунта не добавлен в секреты."
+
+    if force:
+        clear_source_cache()
+
     try:
-        if src.get("method") == "public":
-            data = gsheets.download_public(url)
-            meta = {"title": "Google-таблица", "sheets": []}
-        else:
-            if not sa:
-                return "Ключ сервисного аккаунта не добавлен в секреты."
-            data = gsheets.download_service_account(url, sa)
-            try:
-                meta = gsheets.get_metadata(url, sa)
-            except Exception:  # noqa: BLE001
-                meta = {"title": "Google-таблица", "sheets": []}
+        result = _load_table(url, method,
+                             tuple(sorted((src.get("gids") or {}).items())), sa)
     except Exception as e:  # noqa: BLE001
         return _friendly_source_error(e)
 
-    gids = {s["title"]: s["gid"] for s in meta.get("sheets", []) if s.get("gid")
-            is not None}
-    gids.update({k: v for k, v in (src.get("gids") or {}).items() if v})
-    cache = {"url": url, "bytes": data, "at": dt.datetime.now(),
-             "title": meta.get("title") or "Google-таблица",
-             "gids": gids, "id": gsheets.extract_sheet_id(url),
-             "method": src.get("method", "service_account")}
-    st.session_state["source_cache"] = cache
-    _apply_source_cache(cache, new=True)
-    return None
-
-
-def _apply_source_cache(cache: dict, new: bool = False) -> None:
     if st.session_state.get("excel_bytes"):
-        return  # Excel имеет приоритет, пока не вернулись к таблице
-    prev = st.session_state.get("file_bytes")
-    st.session_state["file_bytes"] = cache["bytes"]
-    st.session_state["file_name"] = cache.get("title", "Google-таблица")
-    st.session_state["file_time"] = cache["at"].astimezone(
-        ZoneInfo("Europe/Moscow")).strftime("%H:%M")
+        return None  # Excel имеет приоритет
+
+    prev_id = (st.session_state.get("sheet_source") or {}).get("id")
+    st.session_state["file_bytes"] = result["bytes"]
+    st.session_state["file_name"] = result["title"]
+    st.session_state["file_time"] = result["at"]
     st.session_state["sheet_source"] = {
-        "id": cache.get("id"), "gids": cache.get("gids", {}),
-        "title": cache.get("title"), "is_excel": False,
-        "method": cache.get("method"),
+        "id": result["id"], "gids": result["gids"], "title": result["title"],
+        "is_excel": False, "method": method,
     }
-    if new or prev is None:
+    if prev_id != result["id"]:
         _reset_period()
+    return None
 
 
 def _friendly_source_error(e: Exception) -> str:

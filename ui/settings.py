@@ -106,7 +106,7 @@ def _source() -> None:
             "method": method, "url": url.strip(),
             "refresh_minutes": 0, "gids": new_gids,   # 0 = только вручную
         })
-        st.session_state.pop("source_cache", None)
+        C.clear_source_cache()
         st.toast("Настройки сохранены")
         st.rerun()
     if c2.button("Отменить изменения", key="src_cancel"):
