@@ -94,13 +94,14 @@ if st.button("Загрузить из Google", type="primary", disabled=sa_info 
             st.stop()
         process(data, "Google-таблица")
 
-# --- запасной способ: файл ---
-with st.expander("Загрузить файл .xlsx вместо этого"):
-    uploaded = st.file_uploader("Файл Excel (.xlsx)", type=["xlsx"])
-    if uploaded is not None:
-        process(uploaded.getvalue(), uploaded.name)
-
 if st.session_state.get("file_bytes"):
     st.divider()
     st.caption(f"Сейчас загружено: {st.session_state.get('file_name')}. "
                "Можно перейти к страницам слева.")
+
+# --- запасной способ: файл (в боковой панели, чтобы не мешать основному) ---
+st.sidebar.divider()
+st.sidebar.subheader("Загрузить файл")
+uploaded = st.sidebar.file_uploader("Файл Excel (.xlsx)", type=["xlsx"])
+if uploaded is not None:
+    process(uploaded.getvalue(), uploaded.name)
