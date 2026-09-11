@@ -15,6 +15,7 @@ CONFIG_DIR = Path(__file__).resolve().parent.parent / "config"
 BRANDS_PATH = CONFIG_DIR / "brands.json"
 RULES_PATH = CONFIG_DIR / "rules.json"
 WHITELIST_PATH = CONFIG_DIR / "whitelist.txt"
+IGNORED_PATH = CONFIG_DIR / "ignored.json"
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -38,6 +39,46 @@ def load_whitelist() -> set[str]:
             if line and not line.startswith("#"):
                 words.add(line)
     return words
+
+
+def load_ignored() -> dict[str, Any]:
+    """Скрытые вручную замечания («Не ошибка»).
+
+    Формат: {"ключ": {"comment": "...", "added": "..."}}, где ключ = лист|строка|код.
+    """
+    if IGNORED_PATH.exists():
+        try:
+            return _read_json(IGNORED_PATH)
+        except Exception:  # noqa: BLE001
+            return {}
+    return {}
+
+
+def save_ignored(data: dict[str, Any]) -> None:
+    _write_json(IGNORED_PATH, data)
+
+
+def ignore_key(sheet: str, row, code: str) -> str:
+    return f"{sheet}|{row}|{code}"
+
+
+def add_ignored(sheet: str, row, code: str, note: str = "") -> None:
+    data = load_ignored()
+    data[ignore_key(sheet, row, code)] = {"sheet": sheet, "row": row,
+                                          "code": code, "note": note}
+    save_ignored(data)
+
+
+def remove_ignored(key: str) -> None:
+    data = load_ignored()
+    data.pop(key, None)
+    save_ignored(data)
+
+
+def add_word_to_whitelist(word: str) -> None:
+    words = load_whitelist()
+    words.add(word.strip())
+    save_whitelist(words)
 
 
 def save_brands(data: dict[str, Any]) -> None:

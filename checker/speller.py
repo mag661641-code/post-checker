@@ -24,6 +24,39 @@ def _clean_for_speller(text: str) -> str:
     return text
 
 
+def spell_text(text: str, whitelist: set[str],
+               timeout: int = 10) -> tuple[str, list[dict]]:
+    """Проверить текст и вернуть (статус, список слов).
+
+    Статус: "ok" | "unavailable". Список: [{"word": ..., "variants": [...]}, ...].
+    Функция чистая — удобно кешировать по тексту в интерфейсе.
+    """
+    clean = _clean_for_speller(text)
+    if not clean.strip():
+        return "ok", []
+    try:
+        resp = requests.post(
+            SPELLER_URL,
+            data={"text": clean, "lang": "ru", "options": 512},
+            timeout=timeout,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception:  # noqa: BLE001
+        return "unavailable", []
+
+    wl_lower = {w.lower() for w in whitelist}
+    out: list[dict] = []
+    seen = set()
+    for item in data:
+        word = item.get("word", "")
+        if not word or word.lower() in wl_lower or word in seen:
+            continue
+        seen.add(word)
+        out.append({"word": word, "variants": item.get("s", [])})
+    return "ok", out
+
+
 def check_post_spelling(post: PostRecord, whitelist: set[str],
                         timeout: int = 10) -> list[Issue]:
     text = _clean_for_speller(post.text)
