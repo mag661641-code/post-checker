@@ -9,7 +9,7 @@ from ui_common import (all_issues_from_state, cached_load, issues_to_df,
 from checker.models import Level
 
 page_setup("Сводка", "📊")
-st.title("📊 Сводка")
+st.title("Сводка")
 
 file_bytes = require_file()
 if not file_bytes:

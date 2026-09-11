@@ -7,7 +7,7 @@ from ui_common import cached_load, get_config, issues_to_df, page_setup, require
 from checker import online_checks
 
 page_setup("Онлайн-проверка", "🌐")
-st.title("🌐 Онлайн-проверка опубликованных постов")
+st.title("Онлайн-проверка опубликованных постов")
 st.caption("Проверка идёт в интернет и занимает время. Запускается по кнопке. "
            "Работа зависит от самих площадок и может измениться при обновлении "
            "их сайтов.")

@@ -13,11 +13,33 @@
 from __future__ import annotations
 
 import io
+import json
 import re
 from typing import Any
 
 XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.readonly"
+
+
+def coerce_service_account(info: Any) -> dict[str, Any]:
+    """Привести ключ сервисного аккаунта к нормальному dict.
+
+    Принимает:
+      - dict (TOML-таблица `[gcp_service_account]`);
+      - строку с JSON (когда вставлен весь файл-ключ целиком).
+    Чинит `private_key`, если переносы строк остались как литеральные «\\n».
+    """
+    if isinstance(info, str):
+        data = json.loads(info)
+    elif isinstance(info, dict):
+        data = dict(info)
+    else:
+        # объекты Streamlit Secrets ведут себя как dict
+        data = {k: info[k] for k in info}
+    pk = str(data.get("private_key", ""))
+    if "\\n" in pk and "\n" not in pk:
+        data["private_key"] = pk.replace("\\n", "\n")
+    return data
 
 
 def extract_sheet_id(url_or_id: str) -> str:
@@ -54,7 +76,7 @@ def download_as_xlsx(url_or_id: str, service_account_info: dict[str, Any]) -> by
 
     file_id = extract_sheet_id(url_or_id)
     creds = Credentials.from_service_account_info(
-        dict(service_account_info), scopes=[DRIVE_SCOPE])
+        coerce_service_account(service_account_info), scopes=[DRIVE_SCOPE])
     service = build("drive", "v3", credentials=creds, cache_discovery=False)
 
     request = service.files().export_media(fileId=file_id, mimeType=XLSX_MIME)

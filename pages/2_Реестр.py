@@ -7,7 +7,7 @@ from ui_common import (issues_to_df, level_filter_widget, page_setup,
                        require_file)
 
 page_setup("Реестр", "📋")
-st.title("📋 Замечания по реестру")
+st.title("Замечания по реестру")
 st.caption("Номер строки совпадает с номером строки в Excel.")
 
 if not require_file():

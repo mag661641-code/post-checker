@@ -12,7 +12,7 @@ from checker import speller
 from checker.models import Level
 
 page_setup("Тексты постов", "✍️")
-st.title("✍️ Тексты постов")
+st.title("Тексты постов")
 
 file_bytes = require_file()
 if not file_bytes:

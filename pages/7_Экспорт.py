@@ -10,7 +10,7 @@ from checker import report_mod
 from checker.models import Level
 
 page_setup("Экспорт", "💾")
-st.title("💾 Экспорт отчёта")
+st.title("Экспорт отчёта")
 
 file_bytes = require_file()
 if not file_bytes:

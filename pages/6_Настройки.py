@@ -10,7 +10,7 @@ from ui_common import get_config, page_setup
 from checker import config_mod
 
 page_setup("Настройки", "⚙️")
-st.title("⚙️ Настройки")
+st.title("Настройки")
 st.caption("Изменения сохраняются в папку config/. После сохранения вернитесь "
            "на страницу «Загрузка» и запустите проверку заново (или перезагрузите "
            "файл), чтобы применить правила.")

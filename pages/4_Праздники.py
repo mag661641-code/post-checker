@@ -11,7 +11,7 @@ from checker import holidays_mod
 from checker.normalize import canonical_post_type
 
 page_setup("Праздники", "🎉")
-st.title("🎉 Обязательные праздники")
+st.title("Обязательные праздники")
 
 file_bytes = require_file()
 if not file_bytes:

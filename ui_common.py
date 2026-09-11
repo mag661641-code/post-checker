@@ -45,7 +45,7 @@ def require_auth() -> None:
 
     if st.session_state.get("_authenticated"):
         # кнопка выхода в боковой панели
-        if st.sidebar.button("🚪 Выйти", key="logout_btn"):
+        if st.sidebar.button("Выйти", key="logout_btn"):
             st.session_state["_authenticated"] = False
             st.rerun()
         return
