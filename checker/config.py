@@ -66,14 +66,28 @@ def save_ignored(data: dict[str, Any]) -> None:
     _write_json(IGNORED_PATH, data)
 
 
-def ignore_key(sheet: str, row, code: str) -> str:
-    return f"{sheet}|{row}|{code}"
+def content_hash(text: str) -> str:
+    import hashlib
+    return hashlib.md5((text or "").encode("utf-8")).hexdigest()[:10]
 
 
-def add_ignored(sheet: str, row, code: str, note: str = "") -> None:
+def ignore_key(sheet: str, code: str, chash: str) -> str:
+    """Ключ скрытия: лист + код проверки + отпечаток текста ячейки.
+
+    По отпечатку, а не по номеру строки, чтобы при добавлении строк в таблицу
+    скрытие не «переехало» на другой пост. Если текст изменится — замечание
+    снова покажется.
+    """
+    return f"{sheet}|{code}|{chash}"
+
+
+def add_ignored(sheet: str, code: str, chash: str, row=None,
+                note: str = "") -> None:
+    import datetime as _dt
     data = load_ignored()
-    data[ignore_key(sheet, row, code)] = {"sheet": sheet, "row": row,
-                                          "code": code, "note": note}
+    data[ignore_key(sheet, code, chash)] = {
+        "sheet": sheet, "code": code, "hash": chash, "row": row,
+        "note": note, "added": _dt.date.today().isoformat()}
     save_ignored(data)
 
 

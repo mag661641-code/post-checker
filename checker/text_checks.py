@@ -140,8 +140,9 @@ def check_required_hashtags(post: PostRecord, code: str, brands, rules) -> list[
     required = b.get("required_hashtags_shipment", [])
     canon_type, _ = N.canonical_post_type(post.post_type,
                                            rules.get("post_type_canonical", {}))
-    # обязательные хэштеги — правило для отгрузок
-    if canon_type != "Отгрузка" or not required:
+    # обязательные хэштеги — для типов из настроек (по умолчанию «Отгрузка»)
+    hashtag_types = rules.get("hashtag_required_types", ["Отгрузка"])
+    if canon_type not in hashtag_types or not required:
         return []
     tags = {t.lower() for t in _hashtags(post.text)}
     missing = [h for h in required if h.lower() not in tags]

@@ -350,7 +350,9 @@ def _issue_list(data: C.AppData, post: PostRecord, issues: list[Issue]) -> None:
                     if st.button("Не ошибка",
                                  key=f"ig_{post.row}_{n}_{iss.code}",
                                  help="Скрыть это замечание"):
-                        config_mod.add_ignored(iss.sheet, iss.row, iss.code)
+                        chash = config_mod.content_hash(post.text)
+                        config_mod.add_ignored(iss.sheet, iss.code, chash,
+                                               row=post.row)
                         C.persist_all()
                         st.rerun()
 

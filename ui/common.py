@@ -118,6 +118,15 @@ def cached_base_checks(file_bytes: bytes, cfg_sig: str) -> dict[str, list[Issue]
     registry = registry_checks.run_registry_checks(wb.registry, cfg["brands"],
                                                    cfg["rules"])
     text = text_checks.run_text_checks(wb.posts, cfg["brands"], cfg["rules"])
+    # переопределение уровней проверок из настроек
+    overrides = cfg["rules"].get("check_levels", {})
+    if overrides:
+        for i in registry + text:
+            if i.code in overrides:
+                try:
+                    i.level = Level(overrides[i.code])
+                except ValueError:
+                    pass
     return {"registry": registry, "text": text}
 
 
@@ -214,15 +223,8 @@ def build_app_data(file_bytes: bytes) -> AppData:
     base = cached_base_checks(file_bytes, _config_signature(cfg))
 
     ignored = set(config_mod.load_ignored().keys())
-
-    def visible(iss: Issue) -> bool:
-        return config_mod.ignore_key(iss.sheet, iss.row, iss.code) not in ignored
-
     disabled = {code for code, b in cfg["brands"].items()
                 if not b.get("enabled", True)}
-
-    issues = [i for i in (base["registry"] + base["text"])
-              if visible(i) and i.brand not in disabled]
 
     posts: list[PostRecord] = []
     for code, brand_posts in wb.posts.items():
@@ -231,6 +233,20 @@ def build_app_data(file_bytes: bytes) -> AppData:
         posts.extend(brand_posts)
 
     registry_by_row = {rr.row: rr for rr in wb.registry}
+    post_text_by_key = {(p.sheet, p.row): p.text for p in posts}
+
+    def issue_cell_text(iss: Issue) -> str:
+        if iss.sheet == loader_mod.REGISTRY_SHEET:
+            rr = registry_by_row.get(iss.row)
+            return rr.links_raw if rr else ""
+        return post_text_by_key.get((iss.sheet, iss.row), "")
+
+    def visible(iss: Issue) -> bool:
+        chash = config_mod.content_hash(issue_cell_text(iss))
+        return config_mod.ignore_key(iss.sheet, iss.code, chash) not in ignored
+
+    issues = [i for i in (base["registry"] + base["text"])
+              if i.brand not in disabled and visible(i)]
 
     # статус поста берём из реестра по совпадению ссылок
     link_status: dict[str, str] = {}
