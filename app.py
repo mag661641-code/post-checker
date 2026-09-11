@@ -29,10 +29,14 @@ if _has_pw and st.session_state.get("_authenticated"):
 
 # --- навигация: 4 пункта ---
 nav = st.navigation([
-    st.Page(posts.render, title="Проверка постов", icon="✅", default=True),
-    st.Page(holidays.render, title="Обязательные праздники", icon="🎉"),
-    st.Page(publications.render, title="Проверка публикаций", icon="🌐"),
-    st.Page(settings.render, title="Настройки", icon="⚙️"),
+    st.Page(posts.render, title="Проверка постов", icon="✅",
+            url_path="posts", default=True),
+    st.Page(holidays.render, title="Обязательные праздники", icon="🎉",
+            url_path="holidays"),
+    st.Page(publications.render, title="Проверка публикаций", icon="🌐",
+            url_path="publications"),
+    st.Page(settings.render, title="Настройки", icon="⚙️",
+            url_path="settings"),
 ])
 
 # --- кнопка скачивания отчёта (видна на всех страницах, если есть данные) ---
