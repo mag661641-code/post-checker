@@ -458,65 +458,171 @@ def spell_for_post(post: PostRecord, cfg: dict) -> tuple[str, list[dict]]:
 
 
 # ---------------------------------------------------------------------------
-# Боковая панель: файл + экспорт
+# Источник данных: Google-таблица (авто) + Excel (запасной)
 # ---------------------------------------------------------------------------
-def _load_file_bytes(file_bytes: bytes, name: str) -> None:
-    st.session_state["file_bytes"] = file_bytes
-    st.session_state["file_name"] = name
-    st.session_state["file_time"] = moscow_today().strftime("%d.%m.%Y")
-    # сбросить период — пересчитается под новый файл
+def get_service_account():
+    """Ключ сервисного аккаунта из секретов (dict или JSON-строка)."""
+    try:
+        return (st.secrets.get("gcp_service_account_json")     # type: ignore
+                or st.secrets.get("gcp_service_account"))      # type: ignore
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _now_msk_hhmm() -> str:
+    return dt.datetime.now(ZoneInfo("Europe/Moscow")).strftime("%H:%M")
+
+
+def _reset_period() -> None:
     st.session_state.pop("period", None)
     st.session_state.pop("period_note", None)
 
 
-def sidebar_file_block() -> Optional[bytes]:
-    """Блок работы с файлом в боковой панели. Возвращает file_bytes или None."""
+def fetch_source(force: bool = False) -> Optional[str]:
+    """Загрузить таблицу из источника в session_state. Вернуть текст ошибки или None."""
+    from checker import gsheets
+    src = config_mod.load_source()
+    url = src.get("url", "").strip()
+    if not url:
+        return None
+
+    cache = st.session_state.get("source_cache") or {}
+    ttl_min = src.get("refresh_minutes", 10) or 0
+    fresh = (cache.get("url") == url and cache.get("bytes") is not None)
+    if fresh and not force and ttl_min:
+        age = (dt.datetime.now() - cache["at"]).total_seconds() / 60
+        if age < ttl_min:
+            _apply_source_cache(cache)
+            return None
+    if fresh and not force and not ttl_min:
+        # «только вручную» — не перезагружать, пока не нажали обновить
+        _apply_source_cache(cache)
+        return None
+
+    sa = get_service_account()
+    try:
+        if src.get("method") == "public":
+            data = gsheets.download_public(url)
+            meta = {"title": "Google-таблица", "sheets": []}
+        else:
+            if not sa:
+                return "Ключ сервисного аккаунта не добавлен в секреты."
+            data = gsheets.download_service_account(url, sa)
+            try:
+                meta = gsheets.get_metadata(url, sa)
+            except Exception:  # noqa: BLE001
+                meta = {"title": "Google-таблица", "sheets": []}
+    except Exception as e:  # noqa: BLE001
+        return _friendly_source_error(e)
+
+    gids = {s["title"]: s["gid"] for s in meta.get("sheets", []) if s.get("gid")
+            is not None}
+    gids.update({k: v for k, v in (src.get("gids") or {}).items() if v})
+    cache = {"url": url, "bytes": data, "at": dt.datetime.now(),
+             "title": meta.get("title") or "Google-таблица",
+             "gids": gids, "id": gsheets.extract_sheet_id(url),
+             "method": src.get("method", "service_account")}
+    st.session_state["source_cache"] = cache
+    _apply_source_cache(cache, new=True)
+    return None
+
+
+def _apply_source_cache(cache: dict, new: bool = False) -> None:
+    if st.session_state.get("excel_bytes"):
+        return  # Excel имеет приоритет, пока не вернулись к таблице
+    prev = st.session_state.get("file_bytes")
+    st.session_state["file_bytes"] = cache["bytes"]
+    st.session_state["file_name"] = cache.get("title", "Google-таблица")
+    st.session_state["file_time"] = cache["at"].astimezone(
+        ZoneInfo("Europe/Moscow")).strftime("%H:%M")
+    st.session_state["sheet_source"] = {
+        "id": cache.get("id"), "gids": cache.get("gids", {}),
+        "title": cache.get("title"), "is_excel": False,
+        "method": cache.get("method"),
+    }
+    if new or prev is None:
+        _reset_period()
+
+
+def _friendly_source_error(e: Exception) -> str:
+    txt = str(e)
+    if "403" in txt or "permission" in txt.lower():
+        sa = get_service_account()
+        from checker import gsheets
+        email = gsheets.sa_email(sa) if sa else ""
+        return (f"Нет доступа к таблице. Откройте доступ для адреса {email} "
+                f"с правами «Читатель». Если это запрещено в Google Workspace — "
+                f"используйте публичную ссылку.")
+    if "404" in txt:
+        return "Таблица не найдена или удалена."
+    return "Не удалось загрузить таблицу. Проверьте ссылку и доступ."
+
+
+def sidebar() -> Optional[bytes]:
+    """Боковая панель: название, источник, обновление, экспорт. Возвращает bytes."""
     st.sidebar.title("Проверка постов")
-    data = st.session_state.get("file_bytes")
+
+    # Excel-режим (запасной) имеет приоритет
+    if st.session_state.get("excel_bytes"):
+        st.session_state["file_bytes"] = st.session_state["excel_bytes"]
+        st.session_state["file_name"] = st.session_state.get("excel_name", "Excel")
+        st.session_state["sheet_source"] = {"is_excel": True}
+        with st.sidebar:
+            st.info(f"Сейчас проверяется Excel-файл «"
+                    f"{st.session_state.get('excel_name', '')}»")
+            if st.button("Вернуться к Google-таблице", key="back_to_gs"):
+                for k in ("excel_bytes", "excel_name"):
+                    st.session_state.pop(k, None)
+                _reset_period()
+                st.rerun()
+        return st.session_state.get("file_bytes")
+
+    # автозагрузка из Google-таблицы
+    err = fetch_source(force=False)
+    src = config_mod.load_source()
 
     with st.sidebar:
-        if not data:
-            up = st.file_uploader("Файл реестра (.xlsx)", type=["xlsx"],
-                                  key="uploader_main")
-            if up is not None:
-                _load_file_bytes(up.getvalue(), up.name)
-                st.rerun()
-            _google_block()
+        if src.get("url"):
+            if err:
+                st.error(err)
+            else:
+                st.markdown(f"📗 **{st.session_state.get('file_name', '')}**")
+                st.caption(f"Данные на {st.session_state.get('file_time','')} (МСК)")
+                if st.button("🔄 Обновить данные", key="refresh_src",
+                             help="Загрузить таблицу заново",
+                             use_container_width=True):
+                    e2 = fetch_source(force=True)
+                    if e2:
+                        st.error(e2)
+                    else:
+                        st.rerun()
+                st.link_button("Открыть таблицу", src["url"],
+                               use_container_width=True)
         else:
-            st.caption(f"Загружено: **{st.session_state.get('file_name')}**")
-            st.caption(f"Дата загрузки: {st.session_state.get('file_time', '')}")
-            if st.button("Загрузить другой", key="reload_btn"):
-                for k in ("file_bytes", "file_name", "file_time"):
-                    st.session_state.pop(k, None)
+            st.caption("Google-таблица не подключена. Откройте «Настройки» → "
+                       "«Источник данных».")
+
+        with st.expander("Загрузить Excel вместо таблицы"):
+            up = st.file_uploader("Файл Excel (.xlsx)", type=["xlsx"],
+                                  key="excel_uploader",
+                                  help="Запасной вариант, если таблица недоступна")
+            if up is not None:
+                st.session_state["excel_bytes"] = up.getvalue()
+                st.session_state["excel_name"] = up.name
+                _reset_period()
                 st.rerun()
+
     return st.session_state.get("file_bytes")
 
 
-def _google_block() -> None:
-    """Загрузка из Google-таблицы (если задан сервисный аккаунт)."""
+def sheet_link(row: Optional[int], sheet_name: str) -> Optional[str]:
+    """Ссылка «Открыть в таблице» на строку листа, или None для Excel."""
+    src = st.session_state.get("sheet_source") or {}
+    if src.get("is_excel") or not src.get("id"):
+        return None
     from checker import gsheets
-    try:
-        sa = st.secrets.get("gcp_service_account_json") or \
-             st.secrets.get("gcp_service_account")  # type: ignore
-    except Exception:  # noqa: BLE001
-        sa = None
-    if not sa:
-        return
-    with st.expander("Из Google-таблицы"):
-        url = st.text_input("Ссылка на Google-таблицу",
-                            key="gsheet_url_side",
-                            placeholder="https://docs.google.com/spreadsheets/d/…")
-        if st.button("Загрузить из Google", key="gload_btn"):
-            if not url.strip():
-                st.error("Вставьте ссылку.")
-            else:
-                try:
-                    with st.spinner("Скачиваем таблицу…"):
-                        b = gsheets.download_as_xlsx(url, sa)
-                    _load_file_bytes(b, "Google-таблица")
-                    st.rerun()
-                except Exception as e:  # noqa: BLE001
-                    st.error(f"Не удалось получить таблицу: {e}")
+    gid = (src.get("gids") or {}).get(sheet_name)
+    return gsheets.open_in_sheet_url(src["id"], gid, row)
 
 
 def sidebar_download(data: AppData, filtered: list[tuple[PostRecord, list[Issue]]],
@@ -558,10 +664,11 @@ def sidebar_download(data: AppData, filtered: list[tuple[PostRecord, list[Issue]
 def empty_no_file() -> None:
     st.title("Проверка постов в реестре")
     st.markdown(
-        "### Загрузите файл реестра в панели слева ⬅️\n\n"
-        "Сервис читает реестр «РРП. Реестр постов/отгрузок» и находит ошибки: "
-        "пустые поля и неверные даты, дубли и чужие ссылки, отсутствие контактов "
-        "и хэштегов, остатки шаблонов и промтов, опечатки и типографику, "
-        "нехватку постов к праздникам.\n\n"
-        "Загрузить можно файлом `.xlsx` или прямо из Google-таблицы."
+        "### Подключите Google-таблицу на странице «Настройки» ⚙️\n\n"
+        "Откройте в меню слева **«Настройки» → «Источник данных»** и вставьте "
+        "ссылку на таблицу «РРП. Реестр постов/отгрузок».\n\n"
+        "_или загрузите Excel-файл в панели слева._\n\n"
+        "Сервис находит ошибки: пустые поля и неверные даты, дубли и чужие ссылки, "
+        "отсутствие контактов и хэштегов, остатки шаблонов и промтов, опечатки "
+        "и типографику, нехватку постов к праздникам."
     )

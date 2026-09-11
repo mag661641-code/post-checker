@@ -1,40 +1,40 @@
-"""Чтение реестра напрямую из Google-таблицы через сервисный аккаунт.
+"""Чтение реестра из Google-таблицы (сервисный аккаунт или публичная ссылка).
 
-Подход: таблица скачивается из Google как .xlsx во временную память и
-передаётся тому же загрузчику (loader.load_workbook), что и обычный файл.
-Так сохраняется вся логика проверок (объединённые ячейки, серийные даты и т.п.).
+Таблица скачивается как .xlsx и передаётся тому же загрузчику на openpyxl,
+поэтому логика проверок не меняется. Дополнительно через Sheets API берём
+название таблицы и gid листов — для ссылок «Открыть в таблице».
 
-Сервисному аккаунту достаточно доступа «Читатель» (Viewer) — сервис ничего
-не изменяет в исходной таблице.
-
-Библиотеки google-api-python-client и google-auth импортируются внутри функций,
-чтобы модуль можно было импортировать даже там, где они не установлены.
+Библиотеки google-api-python-client / google-auth импортируются внутри функций,
+чтобы модуль импортировался и там, где их нет.
 """
 from __future__ import annotations
 
 import io
 import json
 import re
-from typing import Any
+from typing import Any, Optional
+
+import requests
 
 XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+GSHEET_MIME = "application/vnd.google-apps.spreadsheet"
 DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.readonly"
+SHEETS_SCOPE = "https://www.googleapis.com/auth/spreadsheets.readonly"
+SCOPES = [DRIVE_SCOPE, SHEETS_SCOPE]
+
+_HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; PostChecker/1.0)"}
 
 
+# ---------------------------------------------------------------------------
+# Ключ сервисного аккаунта
+# ---------------------------------------------------------------------------
 def coerce_service_account(info: Any) -> dict[str, Any]:
-    """Привести ключ сервисного аккаунта к нормальному dict.
-
-    Принимает:
-      - dict (TOML-таблица `[gcp_service_account]`);
-      - строку с JSON (когда вставлен весь файл-ключ целиком).
-    Чинит `private_key`, если переносы строк остались как литеральные «\\n».
-    """
+    """Привести ключ сервисного аккаунта к dict (принимает dict или JSON-строку)."""
     if isinstance(info, str):
         data = json.loads(info)
     elif isinstance(info, dict):
         data = dict(info)
     else:
-        # объекты Streamlit Secrets ведут себя как dict
         data = {k: info[k] for k in info}
     pk = str(data.get("private_key", ""))
     if "\\n" in pk and "\n" not in pk:
@@ -42,8 +42,17 @@ def coerce_service_account(info: Any) -> dict[str, Any]:
     return data
 
 
+def sa_email(info: Any) -> str:
+    try:
+        return coerce_service_account(info).get("client_email", "")
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+# ---------------------------------------------------------------------------
+# Разбор ссылки
+# ---------------------------------------------------------------------------
 def extract_sheet_id(url_or_id: str) -> str:
-    """Достать ID таблицы из ссылки Google Sheets или принять готовый ID."""
     s = (url_or_id or "").strip()
     if not s:
         raise ValueError("Пустая ссылка на Google-таблицу.")
@@ -55,34 +64,194 @@ def extract_sheet_id(url_or_id: str) -> str:
         return m.group(1)
     if re.fullmatch(r"[a-zA-Z0-9_\-]{20,}", s):
         return s
-    raise ValueError("Не удалось распознать ссылку или ID Google-таблицы. "
-                     "Скопируйте ссылку из адресной строки таблицы целиком.")
+    raise ValueError("not_a_url")
 
 
-def download_as_xlsx(url_or_id: str, service_account_info: dict[str, Any]) -> bytes:
-    """Скачать Google-таблицу как .xlsx (bytes) через сервисный аккаунт.
+def is_probably_xlsx_link(url: str) -> bool:
+    return "rtpof=true" in (url or "")
 
-    service_account_info — содержимое JSON-ключа сервисного аккаунта (dict).
-    """
-    try:
-        from google.oauth2.service_account import Credentials
-        from googleapiclient.discovery import build
-        from googleapiclient.http import MediaIoBaseDownload
-    except Exception as e:  # noqa: BLE001
-        raise RuntimeError(
-            "Не установлены библиотеки для Google (google-api-python-client, "
-            "google-auth). Добавьте их в requirements.txt."
-        ) from e
 
-    file_id = extract_sheet_id(url_or_id)
+# ---------------------------------------------------------------------------
+# Клиенты Google
+# ---------------------------------------------------------------------------
+def _clients(info: Any):
+    from google.oauth2.service_account import Credentials
+    from googleapiclient.discovery import build
     creds = Credentials.from_service_account_info(
-        coerce_service_account(service_account_info), scopes=[DRIVE_SCOPE])
-    service = build("drive", "v3", credentials=creds, cache_discovery=False)
+        coerce_service_account(info), scopes=SCOPES)
+    drive = build("drive", "v3", credentials=creds, cache_discovery=False)
+    sheets = build("sheets", "v4", credentials=creds, cache_discovery=False)
+    return drive, sheets
 
-    request = service.files().export_media(fileId=file_id, mimeType=XLSX_MIME)
+
+# ---------------------------------------------------------------------------
+# Метаданные и скачивание
+# ---------------------------------------------------------------------------
+def get_metadata(url_or_id: str, info: Any) -> dict[str, Any]:
+    """Название таблицы и листы (title, gid, rows) через Sheets API."""
+    _, sheets = _clients(info)
+    sid = extract_sheet_id(url_or_id)
+    meta = sheets.spreadsheets().get(
+        spreadsheetId=sid,
+        fields="properties.title,sheets.properties(title,sheetId,"
+               "gridProperties.rowCount)").execute()
+    out = {"title": meta.get("properties", {}).get("title", ""), "sheets": []}
+    for s in meta.get("sheets", []):
+        p = s.get("properties", {})
+        out["sheets"].append({
+            "title": p.get("title", ""),
+            "gid": p.get("sheetId"),
+            "rows": p.get("gridProperties", {}).get("rowCount"),
+        })
+    return out
+
+
+def download_service_account(url_or_id: str, info: Any) -> bytes:
+    from googleapiclient.http import MediaIoBaseDownload
+    drive, _ = _clients(info)
+    sid = extract_sheet_id(url_or_id)
+    request = drive.files().export_media(fileId=sid, mimeType=XLSX_MIME)
     buf = io.BytesIO()
     downloader = MediaIoBaseDownload(buf, request)
     done = False
     while not done:
         _, done = downloader.next_chunk()
     return buf.getvalue()
+
+
+# обратная совместимость со старым интерфейсом
+def download_as_xlsx(url_or_id: str, service_account_info: Any) -> bytes:
+    return download_service_account(url_or_id, service_account_info)
+
+
+def download_public(url_or_id: str) -> bytes:
+    """Скачать таблицу по публичной ссылке (доступ «у кого есть ссылка»)."""
+    sid = extract_sheet_id(url_or_id)
+    url = f"https://docs.google.com/spreadsheets/d/{sid}/export?format=xlsx"
+    resp = requests.get(url, headers=_HEADERS, timeout=30, allow_redirects=True)
+    data = resp.content
+    if not data[:2] == b"PK":
+        raise PermissionError("public_no_access")
+    return data
+
+
+# ---------------------------------------------------------------------------
+# Ссылка на ячейку
+# ---------------------------------------------------------------------------
+def open_in_sheet_url(sheet_id: str, gid: Optional[Any], row: Optional[int]) -> str:
+    base = f"https://docs.google.com/spreadsheets/d/{sheet_id}/edit"
+    if gid is None:
+        return base
+    frag = f"#gid={gid}"
+    if row:
+        frag += f"&range=A{row}"
+    return base + frag
+
+
+# ---------------------------------------------------------------------------
+# Проверка подключения
+# ---------------------------------------------------------------------------
+def test_connection(url: str, method: str, info: Any,
+                    expected_sheets: Optional[list[str]] = None) -> dict[str, Any]:
+    """Проверить подключение. Возвращает понятный структурированный результат.
+
+    Ключи: ok, error, message, title, sheets, sa_email.
+    """
+    res = {"ok": False, "error": None, "message": "", "title": "",
+           "sheets": [], "sa_email": sa_email(info) if info else ""}
+    try:
+        sid = extract_sheet_id(url)
+    except ValueError:
+        res["error"] = "not_a_url"
+        res["message"] = "Это не ссылка на Google-таблицу."
+        return res
+
+    if is_probably_xlsx_link(url):
+        res["error"] = "is_xlsx"
+        res["message"] = ("Это Excel-файл на Google Диске, а не Google-таблица. "
+                          "Откройте его и выберите «Файл → Сохранить как Google "
+                          "Таблицы», затем вставьте новую ссылку.")
+        return res
+
+    if method == "public":
+        try:
+            data = download_public(sid)
+        except PermissionError:
+            res["error"] = "public_no_access"
+            res["message"] = ("Нет доступа по ссылке: включите доступ «Все, у кого "
+                              "есть ссылка».")
+            return res
+        except Exception:  # noqa: BLE001
+            res["error"] = "no_access"
+            res["message"] = "Не удалось скачать таблицу по ссылке."
+            return res
+        res["ok"] = True
+        res["message"] = "Таблица доступна по ссылке."
+        return _check_expected(res, expected_sheets, from_bytes=data)
+
+    # способ А — сервисный аккаунт
+    if not info:
+        res["error"] = "no_sa_key"
+        res["message"] = "Ключ сервисного аккаунта не добавлен в секреты."
+        return res
+    try:
+        from googleapiclient.errors import HttpError
+    except Exception:  # noqa: BLE001
+        HttpError = Exception  # type: ignore
+    try:
+        # проверить тип файла
+        drive, _ = _clients(info)
+        finfo = drive.files().get(fileId=sid, fields="mimeType,name",
+                                  supportsAllDrives=True).execute()
+        if finfo.get("mimeType") != GSHEET_MIME:
+            res["error"] = "is_xlsx"
+            res["message"] = ("Это Excel-файл на Google Диске, а не Google-таблица. "
+                              "Откройте его и выберите «Файл → Сохранить как Google "
+                              "Таблицы», затем вставьте новую ссылку.")
+            return res
+        meta = get_metadata(sid, info)
+    except HttpError as e:  # type: ignore
+        status = getattr(getattr(e, "resp", None), "status", None)
+        if status == 404:
+            res["error"] = "not_found"
+            res["message"] = "Таблица не найдена или удалена."
+        else:
+            res["error"] = "no_access"
+            res["message"] = (
+                f"Нет доступа к таблице. Откройте доступ для адреса "
+                f"{res['sa_email']} с правами «Читатель». Возможно, администратор "
+                f"Google Workspace запрещает доступ для внешних адресов — тогда "
+                f"используйте публичную ссылку.")
+        return res
+    except Exception as e:  # noqa: BLE001
+        res["error"] = "no_access"
+        res["message"] = f"Не удалось подключиться: {e}"
+        return res
+
+    res["ok"] = True
+    res["title"] = meta["title"]
+    res["sheets"] = meta["sheets"]
+    return _check_expected(res, expected_sheets)
+
+
+def _check_expected(res: dict, expected: Optional[list[str]],
+                    from_bytes: Optional[bytes] = None) -> dict:
+    if from_bytes is not None:
+        # для публичной ссылки листы читаем из xlsx
+        try:
+            import openpyxl
+            wb = openpyxl.load_workbook(io.BytesIO(from_bytes), read_only=True)
+            res["sheets"] = [{"title": n, "gid": None, "rows": None}
+                             for n in wb.sheetnames]
+        except Exception:  # noqa: BLE001
+            pass
+    if expected:
+        names = {s["title"] for s in res["sheets"]}
+        missing = [e for e in expected if e not in names]
+        if missing:
+            res["ok"] = False
+            res["error"] = "missing_sheets"
+            res["message"] = ("Не найдены нужные листы: "
+                              + ", ".join(f"«{m}»" for m in missing)
+                              + ". Проверьте, не переименованы ли они.")
+    return res

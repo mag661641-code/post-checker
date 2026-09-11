@@ -14,8 +14,8 @@ C.page_config()
 if not C.require_auth():
     st.stop()
 
-# --- боковая панель: название сервиса + работа с файлом ---
-file_bytes = C.sidebar_file_block()
+# --- боковая панель: название сервиса + источник данных ---
+file_bytes = C.sidebar()
 
 # --- кнопка выхода (если задан пароль) ---
 try:

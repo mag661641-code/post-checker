@@ -7,27 +7,117 @@ import json
 import pandas as pd
 import streamlit as st
 
-from checker import config_mod
+from checker import config_mod, gsheets, loader_mod
 from ui import common as C
 
 
 def render() -> None:
     st.title("Настройки")
-    st.caption("Изменения сохраняются в папку config/. После сохранения "
-               "результаты проверок пересчитаются автоматически.")
 
-    tabs = st.tabs(["Бренды", "Типы постов и соцсети", "Словарь орфографии",
-                    "Скрытые замечания", "Пороги и лимиты"])
+    tabs = st.tabs(["🔗 Источник данных", "Бренды", "Типы постов и соцсети",
+                    "Словарь орфографии", "Скрытые замечания", "Пороги и лимиты"])
     with tabs[0]:
-        _brands()
+        _source()
     with tabs[1]:
-        _types_socials()
+        _brands()
     with tabs[2]:
-        _whitelist()
+        _types_socials()
     with tabs[3]:
-        _ignored()
+        _whitelist()
     with tabs[4]:
+        _ignored()
+    with tabs[5]:
         _thresholds()
+
+
+_REFRESH_OPTIONS = {"5 мин": 5, "10 мин": 10, "30 мин": 30, "1 час": 60,
+                    "Только вручную": 0}
+
+
+def _source() -> None:
+    src = config_mod.load_source()
+    sa = C.get_service_account()
+
+    st.subheader("Подключение к Google-таблице")
+
+    method_labels = {"service_account": "Сервисный аккаунт (рекомендуется)",
+                     "public": "Публичная ссылка"}
+    cur_method = src.get("method", "service_account")
+    method = st.radio("Способ подключения", list(method_labels.keys()),
+                      index=list(method_labels.keys()).index(cur_method),
+                      format_func=lambda k: method_labels[k], key="src_method")
+    if method == "public":
+        st.warning("Таблица будет доступна всем, у кого есть ссылка. "
+                   "В реестре есть внутренние ссылки и имена сотрудников.")
+
+    url = st.text_input("Ссылка на Google-таблицу", value=src.get("url", ""),
+                        key="src_url",
+                        placeholder="https://docs.google.com/spreadsheets/d/…")
+
+    # статус сервисного аккаунта
+    if sa:
+        st.success(f"Ключ сервисного аккаунта добавлен, адрес: {gsheets.sa_email(sa)}")
+    else:
+        st.error("Ключ сервисного аккаунта не добавлен. См. инструкцию в README.")
+
+    # статус таблицы настроек
+    try:
+        settings_url = st.secrets.get("settings_sheet_url")  # type: ignore
+    except Exception:  # noqa: BLE001
+        settings_url = None
+    st.caption("Таблица настроек: "
+               + ("подключена" if settings_url else "не подключена — "
+                  "настройки хранятся до перезапуска, скачивайте резервную копию"))
+
+    if st.button("Проверить подключение", type="primary", key="src_test"):
+        expected = [loader_mod.REGISTRY_SHEET] + loader_mod.BRAND_SHEETS
+        with st.spinner("Проверяем…"):
+            res = gsheets.test_connection(url, method, sa, expected)
+        if res["ok"]:
+            parts = ", ".join(f"{s['title']} — {s['rows']} строк"
+                              for s in res["sheets"][:6] if s.get("rows"))
+            st.success(f"Подключено: «{res['title']}», листов: "
+                       f"{len(res['sheets'])}. {parts}")
+        else:
+            st.error(res["message"])
+            if res["error"] == "no_access" and res.get("sa_email"):
+                st.code(res["sa_email"], language=None)
+
+    refresh_label = next((k for k, v in _REFRESH_OPTIONS.items()
+                          if v == src.get("refresh_minutes", 10)), "10 мин")
+    chosen = st.select_slider("Автообновление данных",
+                              options=list(_REFRESH_OPTIONS.keys()),
+                              value=refresh_label, key="src_refresh")
+
+    with st.expander("Расширенные настройки: листы и колонки таблицы",
+                     expanded=False):
+        st.caption("Нужно, только если в таблице переименовали лист или колонку.")
+        gids = src.get("gids", {})
+        rows = [{"Лист": k, "gid": v} for k, v in gids.items()]
+        st.caption("gid листов (для ссылок «Открыть в таблице» при публичной "
+                   "ссылке). При сервисном аккаунте определяются автоматически.")
+        edited = st.data_editor(pd.DataFrame(rows or [{"Лист": "", "gid": ""}]),
+                                num_rows="dynamic", use_container_width=True,
+                                hide_index=True, key="src_gids")
+
+    c1, c2 = st.columns([1, 1])
+    if c1.button("💾 Сохранить", key="src_save", type="primary"):
+        new_gids = {}
+        try:
+            for _, r in edited.iterrows():
+                if str(r.get("Лист", "")).strip():
+                    new_gids[str(r["Лист"]).strip()] = str(r.get("gid", "")).strip()
+        except Exception:  # noqa: BLE001
+            new_gids = gids
+        config_mod.save_source({
+            "method": method, "url": url.strip(),
+            "refresh_minutes": _REFRESH_OPTIONS[chosen], "gids": new_gids,
+        })
+        st.session_state.pop("source_cache", None)
+        st.toast("Настройки сохранены")
+        st.rerun()
+    if c2.button("Отменить изменения", key="src_cancel"):
+        st.rerun()
 
 
 def _clear_caches() -> None:

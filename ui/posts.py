@@ -218,6 +218,10 @@ def _post_card(data: C.AppData, post: PostRecord, issues: list[Issue]) -> None:
         meta += f" · Статус: {status}"
     st.caption(meta)
 
+    link = C.sheet_link(post.row, post.sheet)
+    if link:
+        st.link_button("Открыть в таблице", link)
+
     # 2. площадки
     _platforms(post)
 
@@ -388,6 +392,7 @@ def _tab_all_issues(data: C.AppData, filtered) -> None:
             "Дата поста": C.fmt_date_short(d) if d else "",
             "Бренд": i.brand,
             "Где": f"{i.sheet}, строка {i.row}",
+            "Открыть": C.sheet_link(i.row, i.sheet) or "",
             "Суть": i.message,
             "Как исправить": i.fix,
         })
@@ -397,6 +402,8 @@ def _tab_all_issues(data: C.AppData, filtered) -> None:
     df = pd.DataFrame(rows)
     st.dataframe(df, use_container_width=True, hide_index=True, height=560,
                  column_config={
+                     "Открыть": st.column_config.LinkColumn(
+                         "Открыть", display_text="в таблице"),
                      "Суть": st.column_config.TextColumn(width="large"),
                      "Как исправить": st.column_config.TextColumn(width="large"),
                  })

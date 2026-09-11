@@ -16,6 +16,14 @@ BRANDS_PATH = CONFIG_DIR / "brands.json"
 RULES_PATH = CONFIG_DIR / "rules.json"
 WHITELIST_PATH = CONFIG_DIR / "whitelist.txt"
 IGNORED_PATH = CONFIG_DIR / "ignored.json"
+SOURCE_PATH = CONFIG_DIR / "source.json"
+
+_SOURCE_DEFAULT = {
+    "method": "service_account",   # service_account | public
+    "url": "",
+    "refresh_minutes": 10,
+    "gids": {},                    # название листа -> gid (для публичной ссылки)
+}
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -79,6 +87,22 @@ def add_word_to_whitelist(word: str) -> None:
     words = load_whitelist()
     words.add(word.strip())
     save_whitelist(words)
+
+
+def load_source() -> dict[str, Any]:
+    data = dict(_SOURCE_DEFAULT)
+    if SOURCE_PATH.exists():
+        try:
+            data.update(_read_json(SOURCE_PATH))
+        except Exception:  # noqa: BLE001
+            pass
+    return data
+
+
+def save_source(data: dict[str, Any]) -> None:
+    merged = dict(_SOURCE_DEFAULT)
+    merged.update(data)
+    _write_json(SOURCE_PATH, merged)
 
 
 def save_brands(data: dict[str, Any]) -> None:

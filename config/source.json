@@ -1,0 +1,6 @@
+{
+  "method": "service_account",
+  "url": "",
+  "refresh_minutes": 10,
+  "gids": {}
+}
