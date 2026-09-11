@@ -175,7 +175,7 @@ def ok_group_id_from_link(url: str) -> Optional[str]:
 
 def max_channel_id_from_link(url: str) -> Optional[str]:
     n = normalize_link(url)
-    m = re.search(r"max\.ru/[^/]*?(-?\d{6,})", n)
+    m = re.search(r"max\.ru/.*?(-?\d{6,})", n)
     if m:
         return m.group(1)
     return None

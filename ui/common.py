@@ -148,10 +148,16 @@ def build_app_data(file_bytes: bytes) -> AppData:
     def visible(iss: Issue) -> bool:
         return config_mod.ignore_key(iss.sheet, iss.row, iss.code) not in ignored
 
-    issues = [i for i in (base["registry"] + base["text"]) if visible(i)]
+    disabled = {code for code, b in cfg["brands"].items()
+                if not b.get("enabled", True)}
+
+    issues = [i for i in (base["registry"] + base["text"])
+              if visible(i) and i.brand not in disabled]
 
     posts: list[PostRecord] = []
-    for brand_posts in wb.posts.values():
+    for code, brand_posts in wb.posts.items():
+        if code in disabled:
+            continue
         posts.extend(brand_posts)
 
     registry_by_row = {rr.row: rr for rr in wb.registry}
