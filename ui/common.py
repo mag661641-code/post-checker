@@ -545,16 +545,18 @@ def _apply_source_cache(cache: dict, new: bool = False) -> None:
 
 
 def _friendly_source_error(e: Exception) -> str:
-    txt = str(e)
-    if "403" in txt or "permission" in txt.lower():
+    from checker import gsheets
+    code, message = gsheets.classify_http_error(e)
+    if code == "api_disabled":
+        return message
+    if code == "not_found":
+        return "Таблица не найдена или удалена."
+    if code == "no_access":
         sa = get_service_account()
-        from checker import gsheets
         email = gsheets.sa_email(sa) if sa else ""
         return (f"Нет доступа к таблице. Откройте доступ для адреса {email} "
                 f"с правами «Читатель». Если это запрещено в Google Workspace — "
                 f"используйте публичную ссылку.")
-    if "404" in txt:
-        return "Таблица не найдена или удалена."
     return "Не удалось загрузить таблицу. Проверьте ссылку и доступ."
 
 

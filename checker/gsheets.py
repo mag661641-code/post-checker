@@ -211,17 +211,16 @@ def test_connection(url: str, method: str, info: Any,
             return res
         meta = get_metadata(sid, info)
     except HttpError as e:  # type: ignore
-        status = getattr(getattr(e, "resp", None), "status", None)
-        if status == 404:
-            res["error"] = "not_found"
-            res["message"] = "Таблица не найдена или удалена."
-        else:
-            res["error"] = "no_access"
+        code, message = classify_http_error(e)
+        res["error"] = code
+        if code == "no_access":
             res["message"] = (
                 f"Нет доступа к таблице. Откройте доступ для адреса "
                 f"{res['sa_email']} с правами «Читатель». Возможно, администратор "
                 f"Google Workspace запрещает доступ для внешних адресов — тогда "
                 f"используйте публичную ссылку.")
+        else:
+            res["message"] = message
         return res
     except Exception as e:  # noqa: BLE001
         res["error"] = "no_access"
@@ -232,6 +231,37 @@ def test_connection(url: str, method: str, info: Any,
     res["title"] = meta["title"]
     res["sheets"] = meta["sheets"]
     return _check_expected(res, expected_sheets)
+
+
+def classify_http_error(e: Exception) -> tuple[str, str]:
+    """Разобрать ошибку Google API. Возвращает (код, понятное сообщение)."""
+    status = getattr(getattr(e, "resp", None), "status", None)
+    content = getattr(e, "content", b"") or b""
+    try:
+        payload = json.loads(content)
+    except Exception:  # noqa: BLE001
+        payload = {}
+    err = payload.get("error", {}) if isinstance(payload, dict) else {}
+    msg = err.get("message", "") if isinstance(err, dict) else ""
+    reason = ""
+    if isinstance(err, dict) and err.get("errors"):
+        reason = err["errors"][0].get("reason", "")
+
+    api_disabled = (reason == "accessNotConfigured"
+                    or "has not been used in project" in msg
+                    or "SERVICE_DISABLED" in str(payload))
+    if api_disabled:
+        url_m = re.search(r"https://console\.[^\s\"']+", msg)
+        which = ("Google Sheets API" if "sheets" in msg.lower()
+                 else "Google Drive API" if "drive" in msg.lower()
+                 else "нужный Google API")
+        hint = (f"Не включён {which} в проекте. Откройте ссылку, нажмите Enable "
+                f"и подождите 1–2 минуты, затем повторите."
+                + (f" Ссылка: {url_m.group(0)}" if url_m else ""))
+        return "api_disabled", hint
+    if status == 404:
+        return "not_found", "Таблица не найдена или удалена."
+    return "no_access", ""
 
 
 def _check_expected(res: dict, expected: Optional[list[str]],
