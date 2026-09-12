@@ -44,9 +44,33 @@ def _brand_by_site_or_phone(text: str, brands: dict) -> set[str]:
 # ---------------------------------------------------------------------------
 # Контакты и бренд
 # ---------------------------------------------------------------------------
+def _is_staff_channel_post(post: PostRecord, b: dict) -> bool:
+    """Пост опубликован только в канале для сотрудников (напр. t.me/SMUdaily).
+
+    Учитываем лишь бренды, у которых канал сотрудников отличается от
+    клиентского, — иначе (когда оба поля совпадают) отдельного «служебного»
+    канала нет и контакты проверять нужно.
+    """
+    tg = b.get("telegram", {})
+    if not isinstance(tg, dict):
+        return False
+    staff = (tg.get("staff") or "").lower()
+    clients = (tg.get("clients") or "").lower()
+    if not staff or staff == clients:
+        return False
+    for s in post.socials:
+        ch = N.tg_channel_from_link(s.get("link", ""))
+        if ch and ch == staff:
+            return True
+    return False
+
+
 def check_contacts_present(post: PostRecord, code: str, brands, rules) -> list[Issue]:
     b = brands.get(code, {})
     if not b:
+        return []
+    # в канале для сотрудников контакты бренда не нужны
+    if _is_staff_channel_post(post, b):
         return []
     not_req = rules.get("contacts_not_required_types", [])
     canon_type, _ = N.canonical_post_type(post.post_type,

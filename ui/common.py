@@ -54,6 +54,13 @@ def fmt_date_short(d: Optional[dt.date]) -> str:
     return f"{d:%d.%m.%Y}, {WEEKDAYS_SHORT[d.weekday()]}"
 
 
+def fmt_date_compact(d: Optional[dt.date]) -> str:
+    """Дата без года для списка постов: «02.09, ср»."""
+    if not d:
+        return ""
+    return f"{d:%d.%m}, {WEEKDAYS_SHORT[d.weekday()]}"
+
+
 def fmt_date_full(d: Optional[dt.date]) -> str:
     if not d:
         return "Дата не указана"

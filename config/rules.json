@@ -61,7 +61,7 @@
       "*|Дзен": ["Дзен"]
     }
   },
-  "contacts_not_required_types": ["Праздник", "Поздравление"],
+  "contacts_not_required_types": ["Праздник", "Поздравление", "Развлекательный"],
   "list_colon_brands": ["МПЭ", "АПС", "МПИ"],
   "list_bullet_markers": ["•", "🔹", "🔸", "✅", "📌", "→", "-", "♦️", "▪️", "◾"],
   "thresholds": {

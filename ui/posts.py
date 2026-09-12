@@ -22,17 +22,25 @@ _EMOJI_RE = re.compile(
 _LEVEL_BG = {Level.ERROR: "#f8cbad", Level.WARNING: "#ffe699",
              Level.ADVICE: None}  # совет — подчёркивание
 
+# Подсказка показывается только на узком экране, где Streamlit ставит
+# колонки друг под другом (карточка уезжает под список).
+_NARROW_HINT = (
+    '<style>.pc-narrow-hint{display:none;color:#888;font-size:.85rem;'
+    'margin-bottom:.3rem}@media (max-width:900px){.pc-narrow-hint'
+    '{display:block}}</style>'
+    '<div class="pc-narrow-hint">Выберите пост — карточка откроется ниже</div>')
+
 
 def _strip_emoji(text: str) -> str:
     return _EMOJI_RE.sub("", text or "").strip()
 
 
-def _text_preview(post: PostRecord) -> str:
+def _text_preview(post: PostRecord, limit: int = 50) -> str:
     t = _strip_emoji(post.text)
     if not t:
         return "(текст не заполнен)"
     t = re.sub(r"\s+", " ", t)
-    return t[:50] + ("…" if len(t) > 50 else "")
+    return t[:limit] + ("…" if len(t) > limit else "")
 
 
 def render() -> None:
@@ -123,57 +131,84 @@ def _tab_posts(data: C.AppData, filtered, filters) -> None:
                   key="reset_empty")
         return
 
-    sort_mode = st.segmented_control("Сортировка", ["По дате", "Сначала с ошибками"],
-                                     default="По дате", key="sort_mode")
+    rules = data.cfg["rules"]
 
     def err_count(iss):
         return sum(1 for i in iss if i.level == Level.ERROR)
 
-    if sort_mode == "Сначала с ошибками":
-        filtered = sorted(filtered, key=lambda x: (-err_count(x[1]),
-                          x[0].date or dt.date.max))
-    else:
-        filtered = sorted(filtered, key=lambda x: (x[0].date or dt.date.max,
-                          x[0].sheet, x[0].row))
-
-    left, right = st.columns([2, 3])
+    left, right = st.columns([5, 6], gap="medium")
 
     with left:
-        _spell_all_button(data, filtered)
+        st.markdown(_NARROW_HINT, unsafe_allow_html=True)
+
+        # строка над таблицей: сортировка · счётчик · орфография
+        top = st.columns([5, 2, 4], vertical_alignment="center")
+        with top[0]:
+            sort_mode = st.segmented_control(
+                "Сортировка", ["По дате", "Сначала с ошибками"],
+                default="По дате", key="sort_mode",
+                label_visibility="collapsed")
+        with top[1]:
+            st.caption(f"{len(filtered)} постов")
+        with top[2]:
+            spell_clicked = st.button("🔤 Проверить орфографию во всех",
+                                      key="spell_all_btn", type="tertiary",
+                                      use_container_width=True)
+
+        sort_mode = sort_mode or "По дате"
+        if sort_mode == "Сначала с ошибками":
+            filtered = sorted(filtered, key=lambda x: (-err_count(x[1]),
+                              x[0].date or dt.date.max))
+        else:
+            filtered = sorted(filtered, key=lambda x: (x[0].date or dt.date.max,
+                              x[0].sheet, x[0].row))
+
         df_rows = []
         for p, iss in filtered:
             df_rows.append({
-                "Дата публикации": C.fmt_date_short(p.date) or "без даты",
+                "Дата": C.fmt_date_compact(p.date) or "без даты",
                 "Бренд": p.brand,
-                "Тип": C.norm_type(p.post_type, data.cfg["rules"]),
-                "Начало текста": _text_preview(p),
-                "🔴": err_count(iss),
-                "🟡": sum(1 for i in iss if i.level == Level.WARNING),
-                "🔵": sum(1 for i in iss if i.level == Level.ADVICE),
+                "Замечания": _issue_badges(iss),
+                "Пост": _post_cell(p, rules),
             })
         df = pd.DataFrame(df_rows)
         event = st.dataframe(
             df, use_container_width=True, hide_index=True,
             on_select="rerun", selection_mode="single-row", height=560,
             column_config={
-                "Дата публикации": st.column_config.TextColumn(width="medium"),
-                "Начало текста": st.column_config.TextColumn(width="large"),
-                "🔴": st.column_config.NumberColumn(width="small"),
-                "🟡": st.column_config.NumberColumn(width="small"),
-                "🔵": st.column_config.NumberColumn(width="small"),
+                "Дата": st.column_config.TextColumn(width="small"),
+                "Бренд": st.column_config.TextColumn(width="small"),
+                "Замечания": st.column_config.TextColumn(width="small"),
+                "Пост": st.column_config.TextColumn(width="large"),
             })
         sel = event.selection.rows if event and event.selection else []
         idx = sel[0] if sel else 0
+
+        if spell_clicked:
+            _spell_all_fragment(data, filtered)
 
     with right:
         post, p_issues = filtered[idx]
         _post_card(data, post, p_issues)
 
 
-def _spell_all_button(data: C.AppData, filtered) -> None:
-    if st.button("Проверить орфографию во всех постах выборки",
-                 key="spell_all_btn"):
-        _spell_all_fragment(data, filtered)
+def _issue_badges(iss: list[Issue]) -> str:
+    """Счётчики замечаний одной строкой: «🔴 2  🟡 1», нули не показываем."""
+    counts = [
+        ("🔴", sum(1 for i in iss if i.level == Level.ERROR)),
+        ("🟡", sum(1 for i in iss if i.level == Level.WARNING)),
+        ("🔵", sum(1 for i in iss if i.level == Level.ADVICE)),
+    ]
+    parts = [f"{emoji} {n}" for emoji, n in counts if n]
+    return "  ".join(parts) if parts else "✅"
+
+
+def _post_cell(post: PostRecord, rules: dict) -> str:
+    """Тип и начало текста в одной ячейке, всего до 70 символов."""
+    ptype = C.norm_type(post.post_type, rules)
+    prefix = f"{ptype} · " if ptype else ""
+    room = max(20, 70 - len(prefix))
+    return prefix + _text_preview(post, room)
 
 
 @st.fragment
@@ -205,64 +240,54 @@ def _post_card(data: C.AppData, post: PostRecord, issues: list[Issue]) -> None:
     rules = data.cfg["rules"]
     ptype = C.norm_type(post.post_type, rules)
 
-    # 1. заголовок
+    # 1. шапка — заголовок и строка с мета + кнопками
     if post.date:
         st.subheader(f"📅 {C.fmt_date_full(post.date)} · {post.brand} · {ptype}")
     else:
         st.subheader(f"📅 :red[Дата не указана] · {post.brand} · {ptype}")
+
     status = data.post_status.get((post.sheet, post.row), "")
-    meta = f'Лист «{post.sheet}», строка Excel {post.row}'
+    meta = f'Лист «{post.sheet}», строка {post.row}'
     if post.executor and post.executor != "-":
         meta += f" · Исполнитель: {post.executor}"
+    plats = _platform_names(post)
+    if plats:
+        meta += " · Площадки: " + ", ".join(plats)
     if status:
         meta += f" · Статус: {status}"
-    st.caption(meta)
 
+    hc = st.columns([6, 2, 2], vertical_alignment="center")
+    hc[0].caption(meta)
     link = C.sheet_link(post.row, post.sheet)
     if link:
-        st.link_button("Открыть в таблице", link)
+        hc[1].link_button("Открыть в таблице", link, use_container_width=True)
+    if post.text:
+        with hc[2].popover("📋 Копировать текст", use_container_width=True):
+            st.code(post.text, language=None)
 
-    # 2. площадки
-    _platforms(post)
-
-    # 3. текст с подсветкой
+    # 2. текст с подсветкой
     st.markdown(_highlight(post.text, issues), unsafe_allow_html=True)
 
     # орфография (автоматически, кешируется)
     spell_issues = _spell_issues(data, post)
 
-    # 4. замечания
+    # 3. замечания
     all_issues = issues + spell_issues
     _issue_list(data, post, all_issues)
 
-    # 5. фото
+    # 4. фото
     _photos(post)
 
-    # 6. копирование текста
-    if post.text:
-        with st.expander("📋 Скопировать текст поста"):
-            st.code(post.text, language=None)
 
-
-def _platforms(post: PostRecord) -> None:
+def _platform_names(post: PostRecord) -> list[str]:
     icons = {"t.me": "Telegram", "vk.com": "VK", "ok.ru": "OK",
              "max.ru": "Max", "dzen.ru": "Дзен"}
-    seen = {}
+    seen: list[str] = []
     for s in post.socials:
-        link = s.get("link", "")
-        d = N.link_domain(link)
-        name = icons.get(d)
+        name = icons.get(N.link_domain(s.get("link", "")))
         if name and name not in seen:
-            seen[name] = link
-    if not seen:
-        return
-    parts = []
-    for name, link in seen.items():
-        if link:
-            parts.append(f"[{name}]({link})")
-        else:
-            parts.append(name)
-    st.markdown("**Площадки:** " + " · ".join(parts))
+            seen.append(name)
+    return seen
 
 
 def _fragment_for_issue(iss: Issue) -> str | None:
@@ -328,20 +353,25 @@ def _issue_list(data: C.AppData, post: PostRecord, issues: list[Issue]) -> None:
         st.success("Замечаний нет 🎉")
         return
     order = {Level.ERROR: 0, Level.WARNING: 1, Level.ADVICE: 2, Level.TECH: 3}
-    for lvl in [Level.ERROR, Level.WARNING, Level.ADVICE]:
-        group = [i for i in issues if i.level == lvl]
-        if not group:
-            continue
-        st.markdown(f"**{C.LEVEL_LABELS[lvl]}**")
-        for n, iss in enumerate(group):
-            cols = st.columns([6, 1.4])
+    ordered = sorted(issues, key=lambda i: order.get(i.level, 9))
+
+    show_key = f"show_all_{post.sheet}_{post.row}"
+    limit = 5
+    show_all = st.session_state.get(show_key, False)
+    visible = ordered if show_all else ordered[:limit]
+
+    for n, iss in enumerate(visible):
+        with st.container(border=True):
+            cols = st.columns([8, 2], vertical_alignment="center")
             with cols[0]:
                 st.markdown(f"{iss.level.emoji} {iss.message}")
                 if iss.fix:
                     st.caption(iss.fix)
             with cols[1]:
                 if iss.code == "spell_error":
-                    if st.button("Добавить слово", key=f"wl_{post.row}_{n}_{iss.code}",
+                    if st.button("Добавить слово",
+                                 key=f"wl_{post.row}_{n}_{iss.code}",
+                                 type="tertiary", use_container_width=True,
                                  help="Добавить в словарь орфографии"):
                         config_mod.add_word_to_whitelist(iss.extra.get("word", ""))
                         C.persist_all()
@@ -349,6 +379,7 @@ def _issue_list(data: C.AppData, post: PostRecord, issues: list[Issue]) -> None:
                 else:
                     if st.button("Не ошибка",
                                  key=f"ig_{post.row}_{n}_{iss.code}",
+                                 type="tertiary", use_container_width=True,
                                  help="Скрыть это замечание"):
                         chash = config_mod.content_hash(post.text)
                         config_mod.add_ignored(iss.sheet, iss.code, chash,
@@ -356,18 +387,47 @@ def _issue_list(data: C.AppData, post: PostRecord, issues: list[Issue]) -> None:
                         C.persist_all()
                         st.rerun()
 
+    hidden = len(ordered) - len(visible)
+    if hidden > 0:
+        if st.button(f"Показать ещё {hidden}",
+                     key=f"more_{post.sheet}_{post.row}"):
+            st.session_state[show_key] = True
+            st.rerun()
+
+
+_PHOTO_TAG_RE = re.compile(r"^(ЛОГО|БЕЗ ЛОГО|ЯБ|СОЦ)\s*:\s*", re.IGNORECASE)
+
+
+def _photo_parts(ph: str, i: int) -> tuple[str, str, str]:
+    """(подпись превью, подпись кнопки, прямая ссылка)."""
+    m = _PHOTO_TAG_RE.match(ph)
+    tag = m.group(1).upper() if m else ""
+    direct = _PHOTO_TAG_RE.sub("", ph).strip()
+    caption = tag or f"Фото {i}"
+    button = f"Фото {i}" + (f" ({tag})" if tag else "")
+    return caption, button, direct
+
 
 def _photos(post: PostRecord) -> None:
     if not post.photos:
         return
-    for ph in post.photos:
-        direct = re.sub(r"^(ЛОГО:|БЕЗ ЛОГО:|ЯБ:|СОЦ:)\s*", "", ph).strip()
-        if re.match(r"https?://i\.ibb\.co/", direct):
-            st.image(direct, width=280)
-        elif direct.lower().startswith("http"):
-            st.link_button("Открыть фото", direct)
-        else:
-            st.caption("🖼 " + ph[:60])
+    items = [_photo_parts(ph, i) for i, ph in enumerate(post.photos, 1)]
+    per_row = 4
+    for start in range(0, len(items), per_row):
+        chunk = items[start:start + per_row]
+        cols = st.columns(per_row)
+        for col, (caption, button, direct) in zip(cols, chunk):
+            with col:
+                is_img = bool(re.match(r"https?://i\.ibb\.co/", direct)) or (
+                    direct.lower().startswith("http")
+                    and re.search(r"\.(jpg|jpeg|png|gif|webp)(\?|$)",
+                                  direct, re.IGNORECASE))
+                if is_img:
+                    st.image(direct, use_container_width=True, caption=caption)
+                elif direct.lower().startswith("http"):
+                    st.link_button(button, direct, use_container_width=True)
+                else:
+                    st.caption("🖼 " + (direct or caption)[:40])
 
 
 # ---------------------------------------------------------------------------

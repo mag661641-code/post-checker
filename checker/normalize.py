@@ -85,6 +85,10 @@ _DOMAIN_ALIASES = {
     "www.ok.ru": "ok.ru",
     "telegram.me": "t.me",
     "www.t.me": "t.me",
+    "www.whatsapp.com": "whatsapp.com",
+    "www.dzen.ru": "dzen.ru",
+    "zen.yandex.ru": "dzen.ru",
+    "www.max.ru": "max.ru",
 }
 
 
@@ -149,9 +153,19 @@ def tg_channel_from_link(url: str) -> Optional[str]:
 
 
 def vk_group_id_from_link(url: str) -> Optional[str]:
-    """Достать id группы VK из ссылки (vk.com/wall-217668235_819 или /public...)."""
+    """Достать id группы VK из ссылки.
+
+    Понимает vk.com/wall-217668235_819, /public…, /club…, а также
+    vk.com/группа?w=wall-217668235_819 (параметр w отбрасывается при
+    нормализации, поэтому разбираем исходную ссылку).
+    """
+    raw = str(url or "")
+    m = re.search(r"[?&]w=wall(-?\d+)_", raw)
+    if m:
+        return m.group(1)
     n = normalize_link(url)
-    if not n.startswith("vk.com"):
+    dom = n.split("/", 1)[0]
+    if dom != "vk.com":
         return None
     m = re.search(r"wall(-?\d+)_", n)
     if m:
@@ -160,6 +174,22 @@ def vk_group_id_from_link(url: str) -> Optional[str]:
     if m:
         return "-" + m.group(1)
     return None
+
+
+def whatsapp_channel_from_link(url: str) -> Optional[str]:
+    """id канала WhatsApp из whatsapp.com/channel/{id}[/{номер}]."""
+    n = normalize_link(url)
+    m = re.search(r"whatsapp\.com/channel/([A-Za-z0-9_\-]+)", n)
+    if m:
+        return m.group(1)
+    return None
+
+
+def is_whatsapp_chat_link(url: str) -> bool:
+    """chat.whatsapp.com/… (группа) или wa.me/… (личный чат) — не публикация."""
+    n = normalize_link(url)
+    dom = n.split("/", 1)[0]
+    return dom in ("chat.whatsapp.com", "wa.me") or n.startswith("chat.whatsapp.com")
 
 
 def ok_group_id_from_link(url: str) -> Optional[str]:
