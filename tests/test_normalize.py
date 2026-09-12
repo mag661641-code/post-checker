@@ -1,6 +1,21 @@
 import datetime as dt
 
 from checker import normalize as N
+from checker import loader as L
+
+
+def test_date_and_note_plain():
+    assert L._date_and_note("18.07.2025") == (dt.date(2025, 7, 18), "")
+
+
+def test_date_and_note_with_suffix():
+    d, note = L._date_and_note("18.07.2025 (доп)")
+    assert d == dt.date(2025, 7, 18) and "18.07.2025 (доп)" in note
+
+
+def test_date_and_note_multiline():
+    d, note = L._date_and_note("30.06.2025\nЯБ 01.07.2025")
+    assert d == dt.date(2025, 6, 30) and "ЯБ 01.07.2025" in note
 
 
 def test_parse_date_text():

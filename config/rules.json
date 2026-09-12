@@ -29,6 +29,7 @@
     "text_mixed_quotes": true,
     "text_hard_wraps": true,
     "text_spelling": false,
+    "text_short_dash": false,
     "text_telegram_length": true,
     "text_link_domain": true,
     "text_info_needs_link": true,

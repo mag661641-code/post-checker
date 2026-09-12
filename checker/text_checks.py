@@ -65,13 +65,37 @@ def _is_staff_channel_post(post: PostRecord, b: dict) -> bool:
     return False
 
 
+# Встроенные значения по умолчанию — страховка на случай, если в rules нет
+# post_type_rules (например, из таблицы настроек подтянулся старый набор).
+_DEFAULT_TYPE_RULES = {
+    "Отгрузка": {"phone": True, "site": True, "email": True, "hashtags": True},
+    "Спецпредложение": {"phone": True, "site": True, "email": True, "hashtags": True},
+    "Поступление": {"phone": False, "site": True, "email": False, "hashtags": True},
+    "Информационный": {"phone": False, "site": True, "email": False, "hashtags": False},
+    "Праздник": {"phone": False, "site": False, "email": False, "hashtags": True},
+    "Поздравление": {"phone": False, "site": False, "email": False, "hashtags": True},
+    "Поздравление (сотрудники)": {"phone": False, "site": False, "email": False, "hashtags": False},
+    "Развлекательный": {"phone": False, "site": False, "email": False, "hashtags": True},
+    "Дзен": {"phone": False, "site": False, "email": False, "hashtags": False},
+    "Анонс": {"phone": False, "site": True, "email": False, "hashtags": True},
+}
+
+
+def _is_known_type(canon_type: str, rules: dict) -> bool:
+    return (canon_type in rules.get("post_type_rules", {})
+            or canon_type in rules.get("post_type_canonical", {})
+            or canon_type in _DEFAULT_TYPE_RULES)
+
+
 def type_rules_for(code: str, canon_type: str, brands: dict, rules: dict) -> dict:
     """Итоговые правила «что проверять» для бренда и типа поста.
 
-    База — общие значения из rules['post_type_rules'], поверх — исключения
-    бренда из brands[code]['type_rules']. Ключи: phone, site, email, hashtags.
+    База — общие значения из rules['post_type_rules'] (или встроенные дефолты,
+    если ключа нет), поверх — исключения бренда из brands[code]['type_rules'].
+    Ключи: phone, site, email, hashtags.
     """
-    base = rules.get("post_type_rules", {}).get(canon_type, {})
+    base = (rules.get("post_type_rules", {}).get(canon_type)
+            or _DEFAULT_TYPE_RULES.get(canon_type, {}))
     out = {k: bool(base.get(k, False))
            for k in ("phone", "site", "email", "hashtags")}
     override = (brands.get(code, {}).get("type_rules", {}) or {}).get(canon_type, {})
@@ -112,7 +136,7 @@ def check_contacts_present(post: PostRecord, code: str, brands, rules) -> list[I
         return []
     canon_type, _ = N.canonical_post_type(post.post_type,
                                            rules.get("post_type_canonical", {}))
-    if canon_type not in rules.get("post_type_rules", {}):
+    if not _is_known_type(canon_type, rules):
         return [Issue(
             post.sheet, post.row, "Тип", Level.WARNING, "text_type_unknown",
             f"Тип поста «{post.post_type}» не распознан, проверка контактов "
@@ -592,13 +616,13 @@ def check_offer_footnote(post: PostRecord, code: str, brands, rules) -> list[Iss
 # Короткое тире вместо длинного
 # ---------------------------------------------------------------------------
 def check_short_dash(post: PostRecord, code: str, brands, rules) -> list[Issue]:
-    # короткое тире «–» между словами (с пробелами) должно быть длинным «—»
+    # По умолчанию выключено (см. toggles): в шаблонах отгрузок длинных тире
+    # просят меньше, поэтому это лишь необязательный совет.
     if re.search(r"\s–\s", post.text or ""):
         return [Issue(
-            post.sheet, post.row, "Пост", Level.WARNING, "text_short_dash",
-            "В тексте короткое тире «–» вместо длинного «—» "
-            "(например, «сталь – ежедневно»).",
-            "В русской типографике между словами ставится длинное «—».",
+            post.sheet, post.row, "Пост", Level.ADVICE, "text_short_dash",
+            "В тексте встречается короткое тире «–».",
+            "Если это тире между словами, обычно ставят длинное «—».",
             brand=code, post_type=post.post_type,
         )]
     return []

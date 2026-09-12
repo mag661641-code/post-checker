@@ -256,6 +256,8 @@ def _post_card(data: C.AppData, post: PostRecord, issues: list[Issue]) -> None:
     meta = f'Лист «{post.sheet}», строка {post.row}'
     if post.executor and post.executor != "-":
         meta += f" · Исполнитель: {post.executor}"
+    if post.date_note:
+        meta += f" · {post.date_note}"
     plats = _platform_names(post)
     if plats:
         meta += " · Площадки: " + ", ".join(plats)

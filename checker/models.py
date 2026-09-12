@@ -70,6 +70,7 @@ class PostRecord:
     row: int                       # номер первой строки группы в Excel
     brand: str
     date: Any = None
+    date_note: str = ""            # примечание к дате из ячейки, напр. «ЯБ 01.07.2025»
     post_type: str = ""
     text: str = ""
     executor: str = ""

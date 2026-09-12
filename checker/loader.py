@@ -22,6 +22,35 @@ BRAND_SHEETS = ["СМУ", "ИМП", "МПЭ", "МПИ", "АПС"]
 HOLIDAYS_SHEET = "Обязательные праздники"
 SHIPMENTS_SHEET = "Отгрузки"
 
+# как может называться колонка с датой поста на листах брендов (по приоритету)
+DATE_COL_NAMES = ["дата", "когда выложить", "дата публикации (план)",
+                  "дата публикации"]
+
+_DATE_IN_TEXT_RE = re.compile(r"\d{1,2}\.\d{1,2}\.\d{4}")
+
+
+def _date_and_note(raw_val: Any) -> tuple[Optional[dt.date], str]:
+    """Дата и примечание из ячейки.
+
+    Если значение — обычная дата, вернуть (дата, ""). Если это текст с датой
+    и примечанием («18.07.2025 (доп)», «30.06.2025\nЯБ 01.07.2025»), взять
+    первую дату по шаблону, а всю исходную запись сохранить как примечание.
+    """
+    d, _ = N.parse_date(raw_val)
+    if d is not None:
+        return d, ""
+    if raw_val is None:
+        return None, ""
+    s = re.sub(r"\s+", " ", str(raw_val)).strip()
+    if not s:
+        return None, ""
+    m = _DATE_IN_TEXT_RE.search(s)
+    if m:
+        d2, _ = N.parse_date(m.group(0))
+        if d2 is not None:
+            return d2, f"в таблице указано: {s}"
+    return None, ""
+
 
 @dataclass
 class LoadedWorkbook:
@@ -187,7 +216,11 @@ def _load_brand_sheet(ws, brand: str) -> tuple[list[PostRecord], list[dict]]:
     colmap = _column_map(grid[hdr_i])
     post_idx = colmap.get("пост")
 
-    date_key = "когда выложить" if "когда выложить" in colmap else "дата"
+    # колонка даты: у разных листов называется по-разному (на СМУ — «Когда выложить»)
+    date_key = next((n for n in DATE_COL_NAMES if n in colmap), "дата")
+    date_col = colmap.get(date_key)
+    soc_col = colmap.get("соцсеть")
+    link_col = colmap.get("ссылка")
 
     posts: list[PostRecord] = []
     comments: list[dict] = []
@@ -202,32 +235,35 @@ def _load_brand_sheet(ws, brand: str) -> tuple[list[PostRecord], list[dict]]:
     for i in range(hdr_i + 1, len(grid)):
         row = grid[i]
         excel_row = i + 1
-        social = _clean(_get(colmap, row, "соцсеть"))
-        link = _clean(_get(colmap, row, "ссылка"))
-        text = _get(colmap, row, "пост")
-        date_val = _get(colmap, row, date_key)
         ptype = _clean(_get(colmap, row, "тип"))
         photo = _clean(_get(colmap, row, "фото"))
         stat = _get(colmap, row, "статистика")
         executor = _clean(_get(colmap, row, "исполнитель"))
 
-        # текст поста берём из «сырой» сетки: в объединённом блоке он есть
-        # только в верхней строке — это и есть признак начала новой группы
+        # дату, текст, соцсеть и ссылку берём из «сырой» сетки — чтобы значение
+        # объединённой ячейки не «протекало» в строки-продолжения
+        raw_date = raw[i][date_col] if date_col is not None and i < len(raw) else None
         raw_text = raw[i][post_idx] if post_idx is not None and i < len(raw) else None
+        social = _clean(raw[i][soc_col]) if soc_col is not None and i < len(raw) else ""
+        link = _clean(raw[i][link_col]) if link_col is not None and i < len(raw) else ""
+        has_text = bool(raw_text and str(raw_text).strip())
 
-        # служебная строка с годом («2025», «2026») или месяцем
-        if _is_service_row(row, colmap, date_val, social, link, raw_text):
+        # служебная строка с годом («2025», «2026») или месяцем («Апрель 2026»)
+        if _is_service_row(row, colmap, raw_date, social, link, raw_text):
             continue
 
-        parsed_date, _ = N.parse_date(date_val)
-        starts_new = bool(raw_text and str(raw_text).strip())
+        parsed_date, date_note = _date_and_note(raw_date)
+
+        # Новый пост начинается на строке с датой; либо на строке с текстом
+        # и соцсетью, но без даты (это настоящий пост без даты).
+        starts_new = parsed_date is not None or (has_text and bool(social))
 
         if starts_new:
             flush()
             current = PostRecord(
                 sheet=brand, row=excel_row, brand=brand,
-                date=parsed_date, post_type=ptype,
-                text=str(text) if text is not None else "",
+                date=parsed_date, date_note=date_note, post_type=ptype,
+                text=str(raw_text) if has_text else "",
                 executor=executor, raw_rows=[excel_row],
             )
             link_in_text = _cell_hyperlink(ws, excel_row, post_idx)
@@ -243,6 +279,13 @@ def _load_brand_sheet(ws, brand: str) -> tuple[list[PostRecord], list[dict]]:
                 # строка-продолжение без начала — пропускаем
                 continue
             current.raw_rows.append(excel_row)
+            # текст на строке-продолжении (напр. «Подпись:», «Клиент:», версия
+            # для другой соцсети) присоединяем к посту и проверяем вместе
+            if has_text:
+                current.text = (current.text + "\n\n" + str(raw_text)).strip()
+                link_in_text = _cell_hyperlink(ws, excel_row, post_idx)
+                if link_in_text and link_in_text not in current.text_links:
+                    current.text_links.append(link_in_text)
             if social or link:
                 current.socials.append({"social": social, "link": link, "row": excel_row})
             if photo:
