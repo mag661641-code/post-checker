@@ -74,6 +74,27 @@ def norm_type(value: str, rules: dict) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Склонение по числу (общая функция для всего интерфейса)
+# ---------------------------------------------------------------------------
+def plural(n: int, one: str, few: str, many: str) -> str:
+    """Выбрать форму слова по числу: 1 пост, 2 поста, 5 постов."""
+    n = abs(int(n))
+    if n % 10 == 1 and n % 100 != 11:
+        return one
+    if 2 <= n % 10 <= 4 and not 12 <= n % 100 <= 14:
+        return few
+    return many
+
+
+def plural_posts(n: int) -> str:
+    return f"{n} {plural(n, 'пост', 'поста', 'постов')}"
+
+
+def plural_links(n: int) -> str:
+    return f"{n} {plural(n, 'ссылка', 'ссылки', 'ссылок')}"
+
+
+# ---------------------------------------------------------------------------
 # Настройка страницы и вход по паролю
 # ---------------------------------------------------------------------------
 def page_config() -> None:
@@ -195,6 +216,8 @@ def pull_settings() -> None:
         config_mod.save_whitelist(bundle["whitelist"])
     if "ignored" in bundle:
         config_mod.save_ignored(bundle["ignored"])
+    if "manual" in bundle:
+        config_mod.save_manual(bundle["manual"])
     if "source" in bundle:
         config_mod.save_source(bundle["source"])
     cached_base_checks.clear()
@@ -216,6 +239,7 @@ def persist_all() -> bool:
             "rules": config_mod.load_rules(),
             "whitelist": sorted(config_mod.load_whitelist()),
             "ignored": config_mod.load_ignored(),
+            "manual": config_mod.load_manual(),
             "source": config_mod.load_source(),
         })
         return True
@@ -400,6 +424,74 @@ def month_selector(data: AppData, key_prefix: str = "posts") -> None:
             st.session_state["period"] = options[idx - 1]
             st.session_state["period_note"] = ""
             st.rerun()
+
+
+def _shift_month(year: int, month: int, delta: int) -> tuple[int, int]:
+    idx = year * 12 + (month - 1) + delta
+    return idx // 12, idx % 12 + 1
+
+
+def _year_options(data: AppData) -> list[int]:
+    years = {p.date.year for p in data.posts if p.date}
+    today = moscow_today()
+    years.update({today.year, today.year + 1})
+    return sorted(years)
+
+
+def period_selector(data: AppData, key_prefix: str = "period") -> None:
+    """Единый выбор месяца и года (общий для всех экранов).
+
+    Раскладка: [←] [Месяц ▾] [Год ▾] [→] и пустая колонка справа, чтобы
+    элементы не растягивались. Выбор сохраняется в session_state['period']
+    как (год, месяц) и общий для всех страниц.
+    """
+    ensure_period(data)
+    period = current_period()
+    today = moscow_today()
+    if isinstance(period, tuple):
+        year, month = period
+    else:
+        year, month = today.year, today.month
+
+    note = st.session_state.get("period_note")
+    if note:
+        st.info(note)
+
+    years = _year_options(data)
+    if year not in years:
+        years = sorted(set(years) | {year})
+    month_names = [MONTHS_NOM[i] for i in range(1, 13)]
+
+    # Ключи виджетов кодируют текущий период: при любой смене периода (стрелки,
+    # другой экран) создаётся новый виджет с правильным index, минуя «залипание»
+    # состояния Streamlit.
+    cols = st.columns([1, 4, 2, 1, 8], vertical_alignment="bottom")
+    prev_clicked = cols[0].button("←", key=f"{key_prefix}_prev",
+                                  help="Предыдущий месяц")
+    sel_month = cols[1].selectbox("Месяц", month_names, index=month - 1,
+                                  key=f"{key_prefix}_month_{year}_{month}")
+    sel_year = cols[2].selectbox("Год", years, index=years.index(year),
+                                 key=f"{key_prefix}_year_{year}_{month}")
+    next_clicked = cols[3].button("→", key=f"{key_prefix}_next",
+                                  help="Следующий месяц")
+
+    if prev_clicked:
+        new_year, new_month = _shift_month(year, month, -1)
+    elif next_clicked:
+        new_year, new_month = _shift_month(year, month, +1)
+    else:
+        new_month = month_names.index(sel_month) + 1
+        new_year = int(sel_year)
+
+    if (new_year, new_month) != (year, month):
+        st.session_state["period"] = (new_year, new_month)
+        st.session_state["period_note"] = ""
+        st.rerun()
+
+
+def posts_in_period(data: AppData, period: Any) -> list[PostRecord]:
+    """Все посты с датой за выбранный месяц (без учёта фильтров)."""
+    return [p for p in data.posts if period_matches(p.date, period)]
 
 
 def period_matches(d: Optional[dt.date], period: Any) -> bool:

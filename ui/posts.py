@@ -56,8 +56,8 @@ def render() -> None:
     # ---- шапка ----
     st.title(f"Проверка за {C.period_title(period)}")
 
-    C.month_selector(data, key_prefix="posts")
-    _posts_without_date(data, period)
+    C.period_selector(data, key_prefix="posts")
+    _period_line(data, period)
 
     filters = C.filters_bar(data)
     filtered = C.apply_filters(data, filters, period)
@@ -83,15 +83,21 @@ def render() -> None:
 # ---------------------------------------------------------------------------
 # Посты без даты
 # ---------------------------------------------------------------------------
-def _posts_without_date(data: C.AppData, period) -> None:
-    if period is None:
-        return
+def _period_line(data: C.AppData, period) -> None:
+    """Одна строка под выбором периода: сколько постов за месяц и без даты."""
+    total = len(C.posts_in_period(data, period))
     no_date = [p for p in data.posts if not p.date]
-    if not no_date:
-        return
-    if st.button(f"Ещё {len(no_date)} постов без даты — показать",
-                 key="show_no_date"):
-        _no_date_dialog(no_date)
+    if total == 0:
+        base = f"За {C.period_title(period)} постов в таблице пока нет"
+    else:
+        base = f"За {C.period_title(period)}: {C.plural_posts(total)}"
+    if no_date:
+        row = st.columns([6, 3], vertical_alignment="center")
+        row[0].caption(f"{base} · ещё {len(no_date)} без даты")
+        if row[1].button("показать", key="show_no_date", type="tertiary"):
+            _no_date_dialog(no_date)
+    else:
+        st.caption(base)
 
 
 @st.dialog("Посты без даты публикации")

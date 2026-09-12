@@ -27,26 +27,15 @@ def render() -> None:
 
     st.title("Обязательные праздники")
 
-    # --- синхронизация месяца с экраном «Проверка постов» ---
+    # --- единый выбор месяца и года (общий со всеми экранами) ---
     C.ensure_period(data)
+    C.period_selector(data, key_prefix="hol")
     period = C.current_period()
     today = C.moscow_today()
     if isinstance(period, tuple):
-        def_year, def_month = period
+        year, month = period
     else:
-        def_year, def_month = today.year, today.month
-
-    c1, c2 = st.columns(2)
-    year = c1.number_input("Год", min_value=2020, max_value=2035,
-                           value=int(def_year), step=1, key="hol_year")
-    month_name = c2.selectbox("Месяц", _MONTH_NAMES, index=def_month - 1,
-                              key="hol_month")
-    month = _MONTH_NAMES.index(month_name) + 1
-
-    # записать выбор обратно в общий период
-    if (int(year), month) != period:
-        st.session_state["period"] = (int(year), month)
-        st.session_state["period_note"] = ""
+        year, month = today.year, today.month
 
     # есть ли вообще посты за этот месяц
     has_posts = any(p.date and (p.date.year, p.date.month) == (int(year), month)

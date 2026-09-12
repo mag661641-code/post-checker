@@ -110,6 +110,10 @@ def _ok_url(gid: str) -> str:
     return f"https://ok.ru/group/{gid}" if gid else ""
 
 
+def _wa_url(cid: str) -> str:
+    return f"https://whatsapp.com/channel/{cid}" if cid else ""
+
+
 @st.dialog("Добавить бренд")
 def _add_brand_dialog(brands: dict) -> None:
     code = st.text_input("Короткий код (как в колонке «Бренд» реестра)",
@@ -126,7 +130,8 @@ def _add_brand_dialog(brands: dict) -> None:
                             "phone": "", "required_hashtags_shipment": [],
                             "telegram": {"clients": "", "staff": ""},
                             "vk_group_id": "", "ok_group_id": "",
-                            "max_channel_id": "", "enabled": True}
+                            "max_channel_id": "", "whatsapp_channel": "",
+                            "enabled": True}
             config_mod.save_brands(brands)
             _clear_caches()
             st.session_state["brand_sel"] = code
@@ -170,6 +175,11 @@ def _extract_channel(kind: str, link: str) -> tuple[str, str]:
         v = N.max_channel_id_from_link(link) or ""
         return v, ("Распознано: канал " + v if v else
                    "Не удалось распознать. Вставьте ссылку на пост канала.")
+    if kind == "wa":
+        v = N.whatsapp_channel_from_link(link) or ""
+        return v, ("Распознан канал: " + v if v else
+                   "Не удалось распознать. Вставьте ссылку вида "
+                   "whatsapp.com/channel/…")
     return "", ""
 
 
@@ -293,6 +303,14 @@ def _brands() -> None:
         else:
             max_id = str(max_link).strip()
 
+        wa_link = st.text_input(
+            "WhatsApp-канал (ссылка на канал или публикацию)",
+            value=_wa_url(b.get("whatsapp_channel", "")),
+            placeholder="https://whatsapp.com/channel/0029Va…", key=f"wa_{code}")
+        wa_id, msg = _extract_channel("wa", wa_link)
+        if wa_link:
+            st.caption(("✅ " if wa_id else "⚠️ ") + msg)
+
     # --- предпросмотр контактного блока ---
     with st.expander("Как выглядит контактный блок"):
         block = []
@@ -318,7 +336,7 @@ def _brands() -> None:
             "first_hashtag_must_be": None if first == "Не важно" else first,
             "telegram": {"clients": cid, "staff": sid},
             "vk_group_id": vk_id, "ok_group_id": ok_id,
-            "max_channel_id": max_id,
+            "max_channel_id": max_id, "whatsapp_channel": wa_id,
         })
         brands[code] = b
         config_mod.save_brands(brands)
@@ -624,6 +642,7 @@ def _current_bundle() -> dict:
         "rules": config_mod.load_rules(),
         "whitelist": sorted(config_mod.load_whitelist()),
         "ignored": config_mod.load_ignored(),
+        "manual": config_mod.load_manual(),
         "source": config_mod.load_source(),
     }
 
@@ -662,6 +681,8 @@ def _apply_bundle(bundle: dict) -> None:
         config_mod.save_whitelist(bundle["whitelist"])
     if "ignored" in bundle:
         config_mod.save_ignored(bundle["ignored"])
+    if "manual" in bundle:
+        config_mod.save_manual(bundle["manual"])
     if "source" in bundle:
         config_mod.save_source(bundle["source"])
     _clear_caches()

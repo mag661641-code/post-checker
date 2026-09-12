@@ -52,7 +52,8 @@
     "ВКонтакте": ["Вконтакте", "ВК", "vk", "вконтакте"],
     "Max": ["МАКС", "Макс", "макс", "MAX", "max"],
     "YouTube": ["Youtube", "youtube", "ютуб"],
-    "Дзен": ["Zen", "дзен", "Yandex Zen"]
+    "Дзен": ["Zen", "дзен", "Yandex Zen"],
+    "WhatsApp": ["Ватсап", "Вотсап", "WA", "whatsapp", "вацап", "вотсап"]
   },
   "expected_platforms": {
     "default": ["Telegram", "Одноклассники", "ВКонтакте", "Max"],
@@ -75,6 +76,7 @@
   "known_domains": [
     "t.me", "telegram.me", "vk.com", "vk.ru", "m.vk.com", "ok.ru", "m.ok.ru",
     "dzen.ru", "max.ru", "ibb.co", "i.ibb.co", "drive.google.com",
+    "whatsapp.com", "wa.me", "chat.whatsapp.com",
     "stalmetural.ru", "inmetprom.ru", "mepen.ru", "aviastal.ru", "metpromintex.ru"
   ],
   "placeholder_pattern": "\\[[^\\]]+\\]",

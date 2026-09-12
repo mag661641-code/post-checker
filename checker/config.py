@@ -16,6 +16,7 @@ BRANDS_PATH = CONFIG_DIR / "brands.json"
 RULES_PATH = CONFIG_DIR / "rules.json"
 WHITELIST_PATH = CONFIG_DIR / "whitelist.txt"
 IGNORED_PATH = CONFIG_DIR / "ignored.json"
+MANUAL_PATH = CONFIG_DIR / "manual.json"
 SOURCE_PATH = CONFIG_DIR / "source.json"
 
 _SOURCE_DEFAULT = {
@@ -95,6 +96,49 @@ def remove_ignored(key: str) -> None:
     data = load_ignored()
     data.pop(key, None)
     save_ignored(data)
+
+
+# --- «Проверено вручную» для экрана публикаций (ключ = ссылка) ---
+def load_manual() -> dict[str, Any]:
+    """Отметки «проверено вручную». Формат: {ключ: {"url":.., "added":..}}."""
+    if MANUAL_PATH.exists():
+        try:
+            return _read_json(MANUAL_PATH)
+        except Exception:  # noqa: BLE001
+            return {}
+    return {}
+
+
+def save_manual(data: dict[str, Any]) -> None:
+    _write_json(MANUAL_PATH, data)
+
+
+def manual_key(url: str) -> str:
+    from . import normalize as N
+    return N.normalize_link(url) or (url or "").strip()
+
+
+def is_manual(url: str) -> bool:
+    return manual_key(url) in load_manual()
+
+
+def manual_added(url: str) -> str:
+    return load_manual().get(manual_key(url), {}).get("added", "")
+
+
+def add_manual(url: str) -> None:
+    import datetime as _dt
+    from zoneinfo import ZoneInfo
+    stamp = _dt.datetime.now(ZoneInfo("Europe/Moscow")).strftime("%d.%m %H:%M")
+    data = load_manual()
+    data[manual_key(url)] = {"url": url, "added": stamp}
+    save_manual(data)
+
+
+def remove_manual(url: str) -> None:
+    data = load_manual()
+    data.pop(manual_key(url), None)
+    save_manual(data)
 
 
 def add_word_to_whitelist(word: str) -> None:
