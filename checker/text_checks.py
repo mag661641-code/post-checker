@@ -65,49 +65,136 @@ def _is_staff_channel_post(post: PostRecord, b: dict) -> bool:
     return False
 
 
+def type_rules_for(code: str, canon_type: str, brands: dict, rules: dict) -> dict:
+    """Итоговые правила «что проверять» для бренда и типа поста.
+
+    База — общие значения из rules['post_type_rules'], поверх — исключения
+    бренда из brands[code]['type_rules']. Ключи: phone, site, email, hashtags.
+    """
+    base = rules.get("post_type_rules", {}).get(canon_type, {})
+    out = {k: bool(base.get(k, False))
+           for k in ("phone", "site", "email", "hashtags")}
+    override = (brands.get(code, {}).get("type_rules", {}) or {}).get(canon_type, {})
+    for k in ("phone", "site", "email", "hashtags"):
+        if k in override:
+            out[k] = bool(override[k])
+    return out
+
+
+def _site_status(post: PostRecord, site: str, rules: dict) -> str:
+    """Есть ли в посте сайт бренда: ok | anchor_no_link | missing.
+
+    Сайт засчитывается, если домен встречается в тексте, либо в ячейке есть
+    гиперссылка (анкор) на домен бренда.
+    """
+    dom = str(site or "").lower().strip()
+    if not dom:
+        return "ok"
+    low = (post.text or "").lower()
+    if dom in low:
+        return "ok"
+    for u in (post.text_links or []):
+        if dom in N.link_domain(u) or dom in (u or "").lower():
+            return "ok"
+    anchor = any(w in low for w in rules.get("anchor_words", []))
+    return "anchor_no_link" if anchor else "missing"
+
+
 def check_contacts_present(post: PostRecord, code: str, brands, rules) -> list[Issue]:
     b = brands.get(code, {})
     if not b:
         return []
-    # в канале для сотрудников контакты бренда не нужны
+    # в канале для сотрудников контакты бренда не проверяются никогда
     if _is_staff_channel_post(post, b):
         return []
-    not_req = rules.get("contacts_not_required_types", [])
+    # тип поста не заполнен — молча пропускаем (это ловит другая проверка)
+    if not (post.post_type or "").strip():
+        return []
     canon_type, _ = N.canonical_post_type(post.post_type,
                                            rules.get("post_type_canonical", {}))
-    if canon_type in not_req:
-        return []
-    issues = []
+    if canon_type not in rules.get("post_type_rules", {}):
+        return [Issue(
+            post.sheet, post.row, "Тип", Level.WARNING, "text_type_unknown",
+            f"Тип поста «{post.post_type}» не распознан, проверка контактов "
+            f"пропущена.",
+            "Проверьте написание типа или добавьте его в настройках "
+            "(«Типы постов»).",
+            brand=code, post_type=post.post_type,
+        )]
+
+    need = type_rules_for(code, canon_type, brands, rules)
+    issues: list[Issue] = []
     text = post.text
     low = text.lower()
-    site = str(b.get("site", "")).lower()
     phone = N.normalize_phone(b.get("phone", ""))
     text_digits = re.sub(r"\D", "", text)
-    if site and site not in low:
-        issues.append(Issue(
-            post.sheet, post.row, "Пост", Level.ERROR, "text_no_site",
-            f"В тексте нет сайта бренда ({b.get('site')}).",
-            "Добавьте сайт в контактный блок — без него читатель не найдёт компанию.",
-            brand=code, post_type=post.post_type,
-        ))
-    if phone and phone not in text_digits:
-        issues.append(Issue(
-            post.sheet, post.row, "Пост", Level.ERROR, "text_no_phone",
-            f"В тексте нет телефона бренда ({b.get('phone')}).",
-            "Добавьте телефон в контактный блок.",
-            brand=code, post_type=post.post_type,
-        ))
-    elif phone and phone in text_digits:
-        # телефон есть — проверим вид дефисов
-        same_digits, same_literal = _phone_style(text, b.get("phone", ""))
-        if same_digits and not same_literal:
+
+    # телефон
+    if need["phone"] and phone:
+        if phone not in text_digits:
             issues.append(Issue(
-                post.sheet, post.row, "Пост", Level.ADVICE, "text_phone_dash",
-                "Телефон записан другим видом дефиса, чем в шаблоне.",
-                "Не ошибка. При желании приведите дефисы к единому виду.",
+                post.sheet, post.row, "Пост", Level.ERROR, "text_no_phone",
+                f"В тексте нет телефона бренда ({b.get('phone')}).",
+                "Добавьте телефон в контактный блок.",
                 brand=code, post_type=post.post_type,
             ))
+        else:
+            same_digits, same_literal = _phone_style(text, b.get("phone", ""))
+            if same_digits and not same_literal:
+                issues.append(Issue(
+                    post.sheet, post.row, "Пост", Level.ADVICE, "text_phone_dash",
+                    "Телефон записан другим видом дефиса, чем в шаблоне.",
+                    "Не ошибка. При желании приведите дефисы к единому виду.",
+                    brand=code, post_type=post.post_type,
+                ))
+
+    # e-mail
+    if need["email"]:
+        email = str(b.get("email", "")).lower().strip()
+        if email and email not in low:
+            issues.append(Issue(
+                post.sheet, post.row, "Пост", Level.ERROR, "text_no_email",
+                f"В тексте нет e-mail бренда ({b.get('email')}).",
+                "Добавьте e-mail в контактный блок.",
+                brand=code, post_type=post.post_type,
+            ))
+
+    # сайт (с учётом ссылки-анкора)
+    if need["site"]:
+        issues.extend(_check_site(post, code, b, need["phone"], rules))
     return issues
+
+
+def _check_site(post: PostRecord, code: str, b: dict, need_phone: bool,
+                rules: dict) -> list[Issue]:
+    site = str(b.get("site", "")).lower()
+    if not site:
+        return []
+    status = _site_status(post, site, rules)
+    if status == "ok":
+        return []
+    if status == "anchor_no_link":
+        return [Issue(
+            post.sheet, post.row, "Пост", Level.WARNING, "text_site_anchor_no_link",
+            "Похоже, ссылка на сайт должна быть в словах «на нашем сайте», "
+            "но самой ссылки в ячейке нет. Проверьте, что текст действительно "
+            "оформлен ссылкой.",
+            "Оформите слова-анкор ссылкой на сайт (при копировании из нейросети "
+            "ссылка часто отваливается).",
+            brand=code, post_type=post.post_type,
+        )]
+    # missing
+    if need_phone:
+        fix = ("Добавьте сайт в контактный блок — для отгрузок и спецпредложений "
+               "он обязателен.")
+    else:
+        fix = ("В информационном посте в конце нужна ссылка на сайт или товар, "
+               "по возможности анкором.")
+    return [Issue(
+        post.sheet, post.row, "Пост", Level.ERROR, "text_no_site",
+        f"Нет ссылки на сайт {b.get('site')}.", fix,
+        brand=code, post_type=post.post_type,
+    )]
 
 
 def _phone_style(text: str, template_phone: str):
@@ -164,9 +251,8 @@ def check_required_hashtags(post: PostRecord, code: str, brands, rules) -> list[
     required = b.get("required_hashtags_shipment", [])
     canon_type, _ = N.canonical_post_type(post.post_type,
                                            rules.get("post_type_canonical", {}))
-    # обязательные хэштеги — для типов из настроек (по умолчанию «Отгрузка»)
-    hashtag_types = rules.get("hashtag_required_types", ["Отгрузка"])
-    if canon_type not in hashtag_types or not required:
+    # хэштеги требуются, если это включено в правилах типа (бренд × тип)
+    if not type_rules_for(code, canon_type, brands, rules)["hashtags"] or not required:
         return []
     tags = {t.lower() for t in _hashtags(post.text)}
     missing = [h for h in required if h.lower() not in tags]
@@ -449,18 +535,96 @@ def check_link_domain(post: PostRecord, code: str, brands, rules) -> list[Issue]
 
 
 def check_info_needs_link(post: PostRecord, code: str, brands, rules) -> list[Issue]:
+    # Ссылка на сайт в инфопосте теперь проверяется в check_contacts_present
+    # с учётом правил бренд × тип и ссылки-анкора. Оставлено для совместимости.
+    return []
+
+
+# ---------------------------------------------------------------------------
+# Сноска про цену и оферту (спецпредложения)
+# ---------------------------------------------------------------------------
+def _norm_footnote(t: str) -> str:
+    t = re.sub(r"^[^\wА-Яа-яЁё]+", "", t or "")  # убрать ведущие эмодзи/символы
+    return re.sub(r"\s+", " ", t).strip().lower()
+
+
+def _has_price(text: str) -> bool:
+    low = (text or "").lower()
+    if "скидк" in low:
+        return True
+    return bool(re.search(r"\d[\d\s.,]*\s*(?:₽|руб|р\.|%)", text or "", re.IGNORECASE))
+
+
+def check_offer_footnote(post: PostRecord, code: str, brands, rules) -> list[Issue]:
+    b = brands.get(code, {})
+    footnote = str(b.get("offer_footnote", "")).strip()
+    if not footnote:
+        return []
     canon_type, _ = N.canonical_post_type(post.post_type,
                                           rules.get("post_type_canonical", {}))
-    if canon_type != "Информационный":
+    req_types = rules.get("footnote_required_types", ["Спецпредложение"])
+    if canon_type not in req_types and not _has_price(post.text):
         return []
-    b = brands.get(code, {})
-    site = str(b.get("site", "")).lower()
-    tail = post.text[-400:].lower()
-    if site and site not in tail:
+    text_norm = _norm_footnote(post.text)
+    if _norm_footnote(footnote) not in text_norm:
         return [Issue(
-            post.sheet, post.row, "Пост", Level.WARNING, "text_info_no_link",
-            "В информационном посте в конце нет ссылки на сайт или товар.",
-            "По памятке «ТЗ» добавьте в конце ссылку на сайт/товар, желательно с анкором.",
+            post.sheet, post.row, "Пост", Level.WARNING, "text_offer_footnote",
+            "В посте с ценой/спецпредложением нет обязательной сноски про цену "
+            "и оферту.",
+            f"Добавьте отдельной строкой перед хэштегами: «{footnote}»",
+            brand=code, post_type=post.post_type,
+        )]
+    # сноска есть — проверим, что перед ней нет звёздочки (слетает при автопостинге)
+    for line in post.text.split("\n"):
+        ln = line.strip()
+        if ln.startswith("*") and _norm_footnote(footnote) in _norm_footnote(ln):
+            return [Issue(
+                post.sheet, post.row, "Пост", Level.ADVICE, "text_footnote_star",
+                "Перед сноской стоит звёздочка «*» — она может слететь при "
+                "автопостинге.",
+                "Уберите «*», оставьте сноску просто отдельной строкой.",
+                brand=code, post_type=post.post_type,
+            )]
+    return []
+
+
+# ---------------------------------------------------------------------------
+# Короткое тире вместо длинного
+# ---------------------------------------------------------------------------
+def check_short_dash(post: PostRecord, code: str, brands, rules) -> list[Issue]:
+    # короткое тире «–» между словами (с пробелами) должно быть длинным «—»
+    if re.search(r"\s–\s", post.text or ""):
+        return [Issue(
+            post.sheet, post.row, "Пост", Level.WARNING, "text_short_dash",
+            "В тексте короткое тире «–» вместо длинного «—» "
+            "(например, «сталь – ежедневно»).",
+            "В русской типографике между словами ставится длинное «—».",
+            brand=code, post_type=post.post_type,
+        )]
+    return []
+
+
+# ---------------------------------------------------------------------------
+# Фото отгрузок: нужны обе строки ЛОГО и БЕЗ ЛОГО
+# ---------------------------------------------------------------------------
+def check_shipment_photo_labels(post: PostRecord, code: str, brands, rules) -> list[Issue]:
+    canon_type, _ = N.canonical_post_type(post.post_type,
+                                          rules.get("post_type_canonical", {}))
+    if canon_type != "Отгрузка" or not post.photos:
+        return []
+    has_logo = any(p.strip().upper().startswith("ЛОГО:") for p in post.photos)
+    has_nologo = any(p.strip().upper().startswith("БЕЗ ЛОГО:") for p in post.photos)
+    missing = []
+    if not has_logo:
+        missing.append("«ЛОГО:»")
+    if not has_nologo:
+        missing.append("«БЕЗ ЛОГО:»")
+    if missing:
+        return [Issue(
+            post.sheet, post.row, "Фото", Level.WARNING, "text_shipment_labels",
+            f"У отгрузки не хватает строк фото: {', '.join(missing)}.",
+            "Для отгрузки нужны обе строки: «ЛОГО:» (в соцсети) и «БЕЗ ЛОГО:» "
+            "(Яндекс Бизнес).",
             brand=code, post_type=post.post_type,
         )]
     return []
@@ -517,6 +681,9 @@ def check_photo_filename(post: PostRecord, code: str, brands, rules) -> list[Iss
 # --- реестр проверок текстов ---
 TEXT_CHECKS = [
     ("text_contacts_present", check_contacts_present),
+    ("text_offer_footnote", check_offer_footnote),
+    ("text_short_dash", check_short_dash),
+    ("text_shipment_labels", check_shipment_photo_labels),
     ("text_other_brand_contacts", check_other_brand_contacts),
     ("text_other_brand_name", check_other_brand_name),
     ("text_required_hashtags", check_required_hashtags),
@@ -535,7 +702,6 @@ TEXT_CHECKS = [
     ("text_hard_wraps", check_hard_wraps),
     ("text_telegram_length", check_telegram_length),
     ("text_link_domain", check_link_domain),
-    ("text_info_needs_link", check_info_needs_link),
     ("text_photo_empty", check_photo_empty),
     ("text_photo_filename", check_photo_filename),
     ("registry_post_type_spelling", check_post_type_spelling),

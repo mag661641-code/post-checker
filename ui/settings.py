@@ -258,6 +258,45 @@ def _brands() -> None:
         if tags:
             st.caption("В посте должно быть: " + " ".join(tags))
 
+    # --- Правила проверки по типам (переопределение для бренда) ---
+    all_rules = config_mod.load_rules()
+    ptr = all_rules.get("post_type_rules", {})
+    type_names = list(all_rules.get("post_type_canonical", {}).keys())
+    brand_tr = b.get("type_rules", {}) or {}
+    _kmap = {"Телефон": "phone", "Сайт": "site", "E-mail": "email",
+             "Хэштеги": "hashtags"}
+    with st.container(border=True):
+        st.markdown("**Правила проверки по типам постов**")
+        st.caption("По умолчанию берутся общие настройки типов. Здесь можно "
+                   "переопределить для этого бренда.")
+        rows = []
+        for t in type_names:
+            base = ptr.get(t, {})
+            ov = brand_tr.get(t, {})
+
+            def _val(k, base=base, ov=ov):
+                return bool(ov.get(k, base.get(k, False)))
+            rows.append({"Тип": t, "Телефон": _val("phone"), "Сайт": _val("site"),
+                         "E-mail": _val("email"), "Хэштеги": _val("hashtags")})
+        type_rules_edit = st.data_editor(
+            pd.DataFrame(rows), hide_index=True, use_container_width=True,
+            key=f"tr_{code}",
+            column_config={
+                "Тип": st.column_config.TextColumn(disabled=True),
+                "Телефон": st.column_config.CheckboxColumn(),
+                "Сайт": st.column_config.CheckboxColumn(),
+                "E-mail": st.column_config.CheckboxColumn(),
+                "Хэштеги": st.column_config.CheckboxColumn()})
+
+    # --- Сноска для спецпредложений ---
+    with st.container(border=True):
+        st.markdown("**Сноска для спецпредложений**")
+        footnote_val = st.text_area(
+            "Текст обязательной сноски про цену и оферту",
+            value=b.get("offer_footnote", ""), key=f"fn_{code}", height=90,
+            placeholder="Цена актуальна на дату публикации и не является "
+                        "публичной офертой…")
+
     # --- Каналы ---
     with st.container(border=True):
         st.markdown("**Каналы и группы в соцсетях**")
@@ -326,7 +365,17 @@ def _brands() -> None:
     st.write("")
     bcols = st.columns([1.4, 1.4, 3, 1.6])
     if bcols[0].button("💾 Сохранить бренд", type="primary", key=f"save_{code}"):
+        type_rules_override = {}
+        for _i, r in type_rules_edit.iterrows():
+            t = r["Тип"]
+            base = ptr.get(t, {})
+            diff = {code_key: bool(r[label]) for label, code_key in _kmap.items()
+                    if bool(r[label]) != bool(base.get(code_key, False))}
+            if diff:
+                type_rules_override[t] = diff
         b.update({
+            "offer_footnote": footnote_val.strip(),
+            "type_rules": type_rules_override,
             "name": name.strip(),
             "site": _norm_site(site),
             "email": email.strip(),
@@ -379,7 +428,15 @@ CHECK_META = [
     ("registry_post_type_spelling", "Реестр", "Написание типа поста",
      "напр., «Информативый»", ["reg_type_spelling", "text_type_spelling"], "warning"),
     ("text_contacts_present", "Контакты", "Контактный блок бренда",
-     "сайт, телефон", ["text_no_site", "text_no_phone", "text_phone_dash"], "error"),
+     "сайт, телефон, e-mail, по типам",
+     ["text_no_site", "text_no_phone", "text_no_email", "text_phone_dash",
+      "text_site_anchor_no_link", "text_type_unknown"], "error"),
+    ("text_offer_footnote", "Контакты", "Сноска в спецпредложении",
+     "про цену и оферту", ["text_offer_footnote", "text_footnote_star"], "warning"),
+    ("text_short_dash", "Типографика", "Короткое тире вместо длинного",
+     "«–» → «—»", ["text_short_dash"], "warning"),
+    ("text_shipment_labels", "Фото", "ЛОГО/БЕЗ ЛОГО у отгрузок",
+     "нужны обе строки", ["text_shipment_labels"], "warning"),
     ("text_other_brand_contacts", "Контакты", "Контакты чужого бренда", "",
      ["text_other_contacts"], "error"),
     ("text_other_brand_name", "Контакты", "Название чужого бренда", "",
@@ -509,28 +566,36 @@ def _dictionaries() -> None:
 
 def _dict_types(rules: dict) -> None:
     types = rules.get("post_type_canonical", {})
-    no_contacts = set(rules.get("contacts_not_required_types", []))
-    need_hash = set(rules.get("hashtag_required_types", ["Отгрузка"]))
+    ptr = rules.get("post_type_rules", {})
     new_vals = {}
     for canon, variants in types.items():
-        st.markdown(f"**{canon}**")
-        cols = st.columns([3, 1, 1])
-        v = cols[0].multiselect("Как ещё пишут в таблице", options=variants,
-                                default=variants, accept_new_options=True,
-                                key=f"tv_{canon}",
-                                placeholder="добавьте вариант написания")
-        nc = cols[1].toggle("Нужны контакты", value=canon not in no_contacts,
-                            key=f"tc_{canon}")
-        nh = cols[2].toggle("Нужны хэштеги", value=canon in need_hash,
-                            key=f"th_{canon}")
-        new_vals[canon] = (v, nc, nh)
+        with st.container(border=True):
+            st.markdown(f"**{canon}**")
+            v = st.multiselect("Как ещё пишут в таблице", options=variants,
+                               default=variants, accept_new_options=True,
+                               key=f"tv_{canon}",
+                               placeholder="добавьте вариант написания")
+            cur = ptr.get(canon, {})
+            st.caption("Что проверять в посте этого типа:")
+            cc = st.columns(4)
+            phone = cc[0].checkbox("Телефон", value=bool(cur.get("phone", False)),
+                                   key=f"tp_{canon}")
+            site = cc[1].checkbox("Сайт", value=bool(cur.get("site", False)),
+                                  key=f"ts_{canon}")
+            email = cc[2].checkbox("E-mail", value=bool(cur.get("email", False)),
+                                   key=f"te_{canon}")
+            hashtags = cc[3].checkbox("Хэштеги", value=bool(cur.get("hashtags", False)),
+                                      key=f"tht_{canon}")
+            new_vals[canon] = (v, phone, site, email, hashtags)
 
+    st.caption("Галочки — общие значения по умолчанию для всех брендов. "
+               "Отличия конкретного бренда задаются в «Бренды» → «Правила "
+               "проверки по типам».")
     if st.button("💾 Сохранить типы", key="types_save", type="primary"):
-        rules["post_type_canonical"] = {c: v for c, (v, _, _) in new_vals.items()}
-        rules["contacts_not_required_types"] = [c for c, (_, nc, _) in
-                                                new_vals.items() if not nc]
-        rules["hashtag_required_types"] = [c for c, (_, _, nh) in
-                                           new_vals.items() if nh]
+        rules["post_type_canonical"] = {c: v for c, (v, *_r) in new_vals.items()}
+        rules["post_type_rules"] = {
+            c: {"phone": p, "site": s, "email": e, "hashtags": h}
+            for c, (_v, p, s, e, h) in new_vals.items()}
         config_mod.save_rules(rules)
         _clear_caches()
         st.toast("Настройки сохранены")

@@ -38,13 +38,29 @@
   "post_type_canonical": {
     "Информационный": ["Информативный", "Информативый", "Информацион", "Инфо"],
     "Спецпредложение": ["Спец предложение", "Спец-предложение", "Спецпредложения"],
+    "Поступление": ["Поступления", "Поступление ", "Приход", "Приход товара"],
     "Поздравление": ["Поздравление (клиенты)", "Поздравление(клиенты)", "Поздравления"],
+    "Поздравление (сотрудники)": ["Поздравление(сотрудники)", "Поздравление сотрудники"],
     "Праздник": ["Праздники"],
     "Отгрузка": ["Отгрузки", "Отгрузка "],
     "Анонс": ["Анонсы"],
     "Развлекательный": ["Развлекательное", "Развлекательные"],
     "Дзен": ["Статья Дзен", "Дзен статья"]
   },
+  "post_type_rules": {
+    "Отгрузка": {"phone": true, "site": true, "email": true, "hashtags": true},
+    "Спецпредложение": {"phone": true, "site": true, "email": true, "hashtags": true},
+    "Поступление": {"phone": false, "site": true, "email": false, "hashtags": true},
+    "Информационный": {"phone": false, "site": true, "email": false, "hashtags": false},
+    "Праздник": {"phone": false, "site": false, "email": false, "hashtags": true},
+    "Поздравление": {"phone": false, "site": false, "email": false, "hashtags": true},
+    "Поздравление (сотрудники)": {"phone": false, "site": false, "email": false, "hashtags": false},
+    "Развлекательный": {"phone": false, "site": false, "email": false, "hashtags": true},
+    "Дзен": {"phone": false, "site": false, "email": false, "hashtags": false},
+    "Анонс": {"phone": false, "site": true, "email": false, "hashtags": true}
+  },
+  "anchor_words": ["на нашем сайте", "в нашем каталоге", "нашем сайте", "на сайте", "в каталоге", "подробнее", "по ссылке"],
+  "footnote_required_types": ["Спецпредложение"],
   "social_canonical": {
     "Telegram": ["Telegram (клиент)", "Telegram (клиенты)", "Telegram(клиент)", "ТГ", "телеграм", "Telegram "],
     "Telegram (сотрудники)": ["Telegram(сотрудники)", "ТГ сотрудники"],

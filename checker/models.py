@@ -77,6 +77,7 @@ class PostRecord:
     stats_comments: list[str] = field(default_factory=list)
     socials: list[dict] = field(default_factory=list)  # {social, link, row}
     raw_rows: list[int] = field(default_factory=list)
+    text_links: list[str] = field(default_factory=list)  # гиперссылки внутри ячейки «Пост» (анкоры)
 
     @property
     def links(self) -> list[str]:

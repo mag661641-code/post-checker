@@ -230,6 +230,9 @@ def _load_brand_sheet(ws, brand: str) -> tuple[list[PostRecord], list[dict]]:
                 text=str(text) if text is not None else "",
                 executor=executor, raw_rows=[excel_row],
             )
+            link_in_text = _cell_hyperlink(ws, excel_row, post_idx)
+            if link_in_text:
+                current.text_links.append(link_in_text)
             if photo:
                 current.photos.append(photo)
             if social or link:
@@ -248,6 +251,20 @@ def _load_brand_sheet(ws, brand: str) -> tuple[list[PostRecord], list[dict]]:
 
     flush()
     return posts, comments
+
+
+def _cell_hyperlink(ws, row: int, col_idx: Optional[int]) -> Optional[str]:
+    """Ссылка, вшитая в ячейку целиком (Insert → Link). Частичные анкоры
+    и формулы HYPERLINK через openpyxl недоступны — их читаем из Google API."""
+    if col_idx is None:
+        return None
+    try:
+        cell = ws.cell(row=row, column=col_idx + 1)
+        h = getattr(cell, "hyperlink", None)
+        target = getattr(h, "target", None) if h else None
+        return target or None
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def _collect_stat_comment(stat: Any, brand: str, row: int,

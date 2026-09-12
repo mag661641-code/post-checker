@@ -247,6 +247,52 @@ def persist_all() -> bool:
         return False
 
 
+@st.cache_data(show_spinner=False)
+def _cached_text_links(sid: str, titles: tuple, _sa) -> dict:
+    """Анкор-гиперссылки по листам брендов (кешируется до «Обновить данные»)."""
+    from checker import gsheets
+    out: dict[str, dict] = {}
+    for t in titles:
+        try:
+            out[t] = gsheets.fetch_text_links(sid, t, _sa)
+        except Exception:  # noqa: BLE001
+            out[t] = {}
+    return out
+
+
+def _attach_text_links(posts: list[PostRecord]) -> None:
+    """Подмешать анкор-ссылки из Google-таблицы в posts (для проверки сайта)."""
+    src = st.session_state.get("sheet_source") or {}
+    if src.get("is_excel") or not src.get("id"):
+        return  # Excel-ссылки уже прочитаны загрузчиком
+    sa = get_service_account()
+    if not sa:
+        return
+    titles = tuple(sorted({p.sheet for p in posts}))
+    if not titles:
+        return
+    try:
+        links_by_sheet = _cached_text_links(src["id"], titles, sa)
+    except Exception:  # noqa: BLE001
+        return
+    for p in posts:
+        for u in (links_by_sheet.get(p.sheet, {}) or {}).get(p.row, []) or []:
+            if u not in p.text_links:
+                p.text_links.append(u)
+
+
+def _site_resolved_keys(posts: list[PostRecord], cfg: dict) -> set[tuple]:
+    """Посты, где сайт фактически есть (домен в тексте или ссылка-анкор)."""
+    from checker import text_checks as T
+    rules, brands = cfg["rules"], cfg["brands"]
+    resolved = set()
+    for p in posts:
+        site = str(brands.get(p.brand, {}).get("site", "")).lower()
+        if site and T._site_status(p, site, rules) == "ok":
+            resolved.add((p.sheet, p.row))
+    return resolved
+
+
 def build_app_data(file_bytes: bytes) -> AppData:
     """Собрать всё необходимое для интерфейса. Тяжёлые проверки кешируются."""
     cfg = get_config()
@@ -263,6 +309,10 @@ def build_app_data(file_bytes: bytes) -> AppData:
             continue
         posts.extend(brand_posts)
 
+    # анкор-ссылки из Google-таблицы (кеш) — чтобы сайт-анкор не считался ошибкой
+    _attach_text_links(posts)
+    site_resolved = _site_resolved_keys(posts, cfg)
+
     registry_by_row = {rr.row: rr for rr in wb.registry}
     post_text_by_key = {(p.sheet, p.row): p.text for p in posts}
 
@@ -276,8 +326,11 @@ def build_app_data(file_bytes: bytes) -> AppData:
         chash = config_mod.content_hash(issue_cell_text(iss))
         return config_mod.ignore_key(iss.sheet, iss.code, chash) not in ignored
 
+    # анкор-ссылка снимает «нет сайта», если сайт фактически есть в ячейке
+    site_codes = {"text_no_site", "text_site_anchor_no_link"}
     issues = [i for i in (base["registry"] + base["text"])
-              if i.brand not in disabled and visible(i)]
+              if i.brand not in disabled and visible(i)
+              and not (i.code in site_codes and (i.sheet, i.row) in site_resolved)]
 
     # статус поста берём из реестра по совпадению ссылок
     link_status: dict[str, str] = {}
@@ -696,6 +749,7 @@ def _load_table(url: str, method: str, gids_extra: tuple, _sa) -> dict:
 
 def clear_source_cache() -> None:
     _load_table.clear()
+    _cached_text_links.clear()
 
 
 def fetch_source(force: bool = False) -> Optional[str]:

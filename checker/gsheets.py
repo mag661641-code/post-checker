@@ -135,6 +135,42 @@ def download_public(url_or_id: str) -> bytes:
     return data
 
 
+def fetch_text_links(url_or_id: str, sheet_title: str, info: Any) -> dict[int, list[str]]:
+    """Гиперссылки-анкоры внутри ячеек листа: {номер_строки_Excel: [uri, ...]}.
+
+    Собирает ссылки трёх видов, которые не видны при выгрузке в .xlsx:
+    целую ссылку ячейки (hyperlink), формулу HYPERLINK(...) и частичные
+    ссылки на фрагменты текста (textFormatRuns → link.uri).
+    """
+    _, sheets = _clients(info)
+    sid = extract_sheet_id(url_or_id)
+    res = sheets.spreadsheets().get(
+        spreadsheetId=sid, ranges=[sheet_title], includeGridData=True,
+        fields=("sheets(data(rowData(values(hyperlink,"
+                "userEnteredValue(formulaValue),"
+                "textFormatRuns(format(link(uri)))))))")).execute()
+    out: dict[int, list[str]] = {}
+    for sh in res.get("sheets", []):
+        for data in sh.get("data", []):
+            for i, rd in enumerate(data.get("rowData", [])):
+                links: list[str] = []
+                for cell in rd.get("values", []) or []:
+                    h = cell.get("hyperlink")
+                    if h:
+                        links.append(h)
+                    fv = cell.get("userEnteredValue", {}).get("formulaValue")
+                    if fv:
+                        links.extend(re.findall(r'HYPERLINK\(\s*"([^"]+)"', fv,
+                                                re.IGNORECASE))
+                    for run in cell.get("textFormatRuns", []) or []:
+                        uri = run.get("format", {}).get("link", {}).get("uri")
+                        if uri:
+                            links.append(uri)
+                if links:
+                    out[i + 1] = links
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Ссылка на ячейку
 # ---------------------------------------------------------------------------
