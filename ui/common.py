@@ -566,7 +566,6 @@ def period_title(period: Any) -> str:
 # ---------------------------------------------------------------------------
 FILTER_DEFAULTS = {
     "f_brands": [],
-    "f_executor": "Все",
     "f_levels": [Level.ERROR, Level.WARNING],
     "f_status": [],
     "f_search": "",
@@ -580,7 +579,8 @@ def _reset_filters() -> None:
 
 
 def filters_bar(data: AppData, brand_only: bool = False) -> dict:
-    """Горизонтальные фильтры. brand_only=True — только бренд (для публикаций)."""
+    """Фильтры под сворачиваемым блоком «Фильтры».
+    brand_only=True — только бренд (для публикаций)."""
     for k, v in FILTER_DEFAULTS.items():
         st.session_state.setdefault(k, list(v) if isinstance(v, list) else v)
 
@@ -591,16 +591,10 @@ def filters_bar(data: AppData, brand_only: bool = False) -> dict:
                           default=st.session_state["f_brands"], key="f_brands")
         return {"brands": brands or brand_codes}
 
-    row1 = st.columns([2, 2, 2])
-    with row1[0]:
+    with st.expander("Фильтры", expanded=False):
         brands = st.pills("Бренд", brand_codes, selection_mode="multi",
                           key="f_brands")
-    with row1[1]:
-        execs = ["Все"] + data.executors
-        if st.session_state["f_executor"] not in execs:
-            st.session_state["f_executor"] = "Все"
-        executor = st.selectbox("Исполнитель", execs, key="f_executor")
-    with row1[2]:
+
         level_opts = list(LEVEL_LABELS.values())
         chosen_labels = st.pills("Уровень замечаний", level_opts,
                                  selection_mode="multi",
@@ -610,24 +604,21 @@ def filters_bar(data: AppData, brand_only: bool = False) -> dict:
         rev = {v: k for k, v in LEVEL_LABELS.items()}
         levels = [rev[l] for l in chosen_labels]
 
-    row2 = st.columns([2, 3, 2, 1.4])
-    with row2[0]:
         status = st.pills("Статус", ["Готово", "Выложено"],
                           selection_mode="multi", key="f_status")
-    with row2[1]:
-        search = st.text_input("Поиск", key="f_search",
-                               placeholder="Поиск по тексту поста",
-                               label_visibility="visible")
-    with row2[2]:
-        only_issues = st.toggle("Только с замечаниями", key="f_only_issues")
-    with row2[3]:
-        st.write("")
-        st.button("Сбросить фильтры", on_click=_reset_filters,
-                  use_container_width=True)
+
+        row = st.columns([4, 2, 2], vertical_alignment="bottom")
+        with row[0]:
+            search = st.text_input("Поиск", key="f_search",
+                                   placeholder="Поиск по тексту поста")
+        with row[1]:
+            only_issues = st.toggle("Только с замечаниями", key="f_only_issues")
+        with row[2]:
+            st.button("Сбросить фильтры", on_click=_reset_filters,
+                      use_container_width=True)
 
     result = {
         "brands": brands or brand_codes,
-        "executor": executor,
         "levels": levels,
         "status": status,
         "search": search.strip().lower() if search else "",
@@ -640,7 +631,6 @@ def filters_bar(data: AppData, brand_only: bool = False) -> dict:
 def default_filters(data: "AppData") -> dict:
     return {
         "brands": list(data.cfg["brands"].keys()),
-        "executor": "Все",
         "levels": [Level.ERROR, Level.WARNING],
         "status": [],
         "search": "",
@@ -669,9 +659,6 @@ def apply_filters(data: AppData, filters: dict, period: Any
         if not period_matches(p.date, period):
             continue
         if filters["brands"] and p.brand not in filters["brands"]:
-            continue
-        if filters.get("executor", "Все") != "Все" and \
-           p.executor != filters["executor"]:
             continue
         if filters.get("status"):
             if data.post_status.get((p.sheet, p.row), "") not in filters["status"]:

@@ -22,14 +22,6 @@ _EMOJI_RE = re.compile(
 _LEVEL_BG = {Level.ERROR: "#f8cbad", Level.WARNING: "#ffe699",
              Level.ADVICE: None}  # совет — подчёркивание
 
-# Подсказка показывается только на узком экране, где Streamlit ставит
-# колонки друг под другом (карточка уезжает под список).
-_NARROW_HINT = (
-    '<style>.pc-narrow-hint{display:none;color:#888;font-size:.85rem;'
-    'margin-bottom:.3rem}@media (max-width:900px){.pc-narrow-hint'
-    '{display:block}}</style>'
-    '<div class="pc-narrow-hint">Выберите пост — карточка откроется ниже</div>')
-
 
 def _strip_emoji(text: str) -> str:
     return _EMOJI_RE.sub("", text or "").strip()
@@ -92,22 +84,29 @@ def _period_line(data: C.AppData, period) -> None:
     else:
         base = f"За {C.period_title(period)}: {C.plural_posts(total)}"
     if no_date:
-        row = st.columns([6, 3], vertical_alignment="center")
-        row[0].caption(f"{base} · ещё {len(no_date)} без даты")
-        if row[1].button("показать", key="show_no_date", type="tertiary"):
-            _no_date_dialog(no_date)
+        st.caption(f"{base} · ещё {len(no_date)} без даты — см. блок внизу")
     else:
         st.caption(base)
 
 
-@st.dialog("Посты без даты публикации")
-def _no_date_dialog(posts: list[PostRecord]) -> None:
-    st.caption("У этих постов не заполнена дата — проставьте её в таблице, "
-               "чтобы они попали в нужный месяц.")
-    rows = [{"Лист": p.sheet, "Строка Excel": p.row,
-             "Начало текста": _text_preview(p)} for p in posts]
-    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True,
-                 height=min(400, 60 + 35 * len(rows)))
+def _no_date_block(data: C.AppData, filters: dict) -> None:
+    """Отдельный блок внизу вкладки: посты без даты, раскрывающимися карточками."""
+    rules = data.cfg["rules"]
+    brands = filters.get("brands") or list(data.cfg["brands"].keys())
+    no_date = [p for p in data.posts if not p.date and p.brand in brands]
+    if not no_date:
+        return
+
+    st.divider()
+    st.markdown(f"#### ⚠️ Посты без даты · {C.plural_posts(len(no_date))}")
+    st.caption("У этих постов не заполнена дата — они не попадают ни в один "
+               "месяц. Проставьте дату в таблице.")
+    no_date = sorted(no_date, key=lambda p: (p.brand, p.sheet, p.row))
+    for p in no_date:
+        issues = [i for i in data.issues_by_post.get((p.sheet, p.row), [])
+                  if i.level != Level.TECH]
+        with st.expander(_post_expander_title(p, issues, rules)):
+            _post_card(data, p, issues)
 
 
 # ---------------------------------------------------------------------------
@@ -131,71 +130,65 @@ def _upcoming_hint(filtered, period) -> None:
 # Вкладка «Посты»
 # ---------------------------------------------------------------------------
 def _tab_posts(data: C.AppData, filtered, filters) -> None:
+    rules = data.cfg["rules"]
+
     if not filtered:
         st.success("Постов с замечаниями нет 🎉")
         st.button("Сбросить фильтры", on_click=C._reset_filters,
                   key="reset_empty")
+        _no_date_block(data, filters)
         return
-
-    rules = data.cfg["rules"]
 
     def err_count(iss):
         return sum(1 for i in iss if i.level == Level.ERROR)
 
-    left, right = st.columns([5, 6], gap="medium")
+    # панель управления над списком: сортировка · счётчик · развернуть · орфография
+    top = st.columns([4, 2, 3, 3], vertical_alignment="center")
+    with top[0]:
+        sort_mode = st.segmented_control(
+            "Сортировка", ["По дате", "Сначала с ошибками"],
+            default="По дате", key="sort_mode", label_visibility="collapsed")
+    with top[1]:
+        st.caption(C.plural_posts(len(filtered)))
+    with top[2]:
+        exp = st.columns(2)
+        if exp[0].button("Развернуть все", key="expand_all",
+                         use_container_width=True):
+            st.session_state["posts_expanded"] = True
+        if exp[1].button("Свернуть все", key="collapse_all",
+                         use_container_width=True):
+            st.session_state["posts_expanded"] = False
+    with top[3]:
+        spell_clicked = st.button("🔤 Проверить орфографию во всех",
+                                  key="spell_all_btn", type="tertiary",
+                                  use_container_width=True)
 
-    with left:
-        st.markdown(_NARROW_HINT, unsafe_allow_html=True)
+    sort_mode = sort_mode or "По дате"
+    if sort_mode == "Сначала с ошибками":
+        filtered = sorted(filtered, key=lambda x: (-err_count(x[1]),
+                          x[0].date or dt.date.max))
+    else:
+        filtered = sorted(filtered, key=lambda x: (x[0].date or dt.date.max,
+                          x[0].sheet, x[0].row))
 
-        # строка над таблицей: сортировка · счётчик · орфография
-        top = st.columns([5, 2, 4], vertical_alignment="center")
-        with top[0]:
-            sort_mode = st.segmented_control(
-                "Сортировка", ["По дате", "Сначала с ошибками"],
-                default="По дате", key="sort_mode",
-                label_visibility="collapsed")
-        with top[1]:
-            st.caption(f"{len(filtered)} постов")
-        with top[2]:
-            spell_clicked = st.button("🔤 Проверить орфографию во всех",
-                                      key="spell_all_btn", type="tertiary",
-                                      use_container_width=True)
+    if spell_clicked:
+        _spell_all_fragment(data, filtered)
 
-        sort_mode = sort_mode or "По дате"
-        if sort_mode == "Сначала с ошибками":
-            filtered = sorted(filtered, key=lambda x: (-err_count(x[1]),
-                              x[0].date or dt.date.max))
-        else:
-            filtered = sorted(filtered, key=lambda x: (x[0].date or dt.date.max,
-                              x[0].sheet, x[0].row))
+    expanded = st.session_state.get("posts_expanded", False)
+    for post, p_issues in filtered:
+        with st.expander(_post_expander_title(post, p_issues, rules),
+                         expanded=expanded):
+            _post_card(data, post, p_issues)
 
-        df_rows = []
-        for p, iss in filtered:
-            df_rows.append({
-                "Дата": C.fmt_date_compact(p.date) or "без даты",
-                "Бренд": p.brand,
-                "Замечания": _issue_badges(iss),
-                "Пост": _post_cell(p, rules),
-            })
-        df = pd.DataFrame(df_rows)
-        event = st.dataframe(
-            df, use_container_width=True, hide_index=True,
-            on_select="rerun", selection_mode="single-row", height=560,
-            column_config={
-                "Дата": st.column_config.TextColumn(width="small"),
-                "Бренд": st.column_config.TextColumn(width="small"),
-                "Замечания": st.column_config.TextColumn(width="small"),
-                "Пост": st.column_config.TextColumn(width="large"),
-            })
-        sel = event.selection.rows if event and event.selection else []
-        idx = sel[0] if sel else 0
+    _no_date_block(data, filters)
 
-        if spell_clicked:
-            _spell_all_fragment(data, filtered)
 
-    with right:
-        post, p_issues = filtered[idx]
-        _post_card(data, post, p_issues)
+def _post_expander_title(post: PostRecord, iss: list[Issue], rules: dict) -> str:
+    """Заголовок раскрывающегося блока: замечания · дата · бренд · тип · текст."""
+    date = C.fmt_date_compact(post.date) or "без даты"
+    ptype = C.norm_type(post.post_type, rules)
+    head = " · ".join(x for x in (f"📅 {date}", post.brand, ptype) if x)
+    return f"{_issue_badges(iss)}  {head} — {_text_preview(post, 60)}"
 
 
 def _issue_badges(iss: list[Issue]) -> str:
@@ -207,14 +200,6 @@ def _issue_badges(iss: list[Issue]) -> str:
     ]
     parts = [f"{emoji} {n}" for emoji, n in counts if n]
     return "  ".join(parts) if parts else "✅"
-
-
-def _post_cell(post: PostRecord, rules: dict) -> str:
-    """Тип и начало текста в одной ячейке, всего до 70 символов."""
-    ptype = C.norm_type(post.post_type, rules)
-    prefix = f"{ptype} · " if ptype else ""
-    room = max(20, 70 - len(prefix))
-    return prefix + _text_preview(post, room)
 
 
 @st.fragment
@@ -254,8 +239,6 @@ def _post_card(data: C.AppData, post: PostRecord, issues: list[Issue]) -> None:
 
     status = data.post_status.get((post.sheet, post.row), "")
     meta = f'Лист «{post.sheet}», строка {post.row}'
-    if post.executor and post.executor != "-":
-        meta += f" · Исполнитель: {post.executor}"
     if post.date_note:
         meta += f" · {post.date_note}"
     plats = _platform_names(post)
@@ -276,8 +259,17 @@ def _post_card(data: C.AppData, post: PostRecord, issues: list[Issue]) -> None:
     # 2. текст с подсветкой
     st.markdown(_highlight(post.text, issues), unsafe_allow_html=True)
 
-    # орфография (автоматически, кешируется)
-    spell_issues = _spell_issues(data, post)
+    # орфография — по кнопке, чтобы не обращаться к сервису сразу для всех
+    # раскрытых постов (результат кешируется)
+    spell_key = f"spell_on_{post.sheet}_{post.row}"
+    if (post.text or "").strip() and not st.session_state.get(spell_key):
+        if st.button("🔤 Проверить орфографию",
+                     key=f"spellbtn_{post.sheet}_{post.row}", type="tertiary"):
+            st.session_state[spell_key] = True
+            st.rerun()
+        spell_issues = []
+    else:
+        spell_issues = _spell_issues(data, post)
 
     # 3. замечания
     all_issues = issues + spell_issues
