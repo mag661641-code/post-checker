@@ -860,11 +860,10 @@ def _sidebar_footer() -> None:
         return
     with st.sidebar:
         st.divider()
-        row = st.columns([3, 1], vertical_alignment="center")
         if email:
-            row[0].caption(email)
+            st.caption(email)
         if can_logout:
-            if row[1].button("Выйти", key="logout"):
+            if st.button("Выйти", key="logout"):
                 st.session_state["_authenticated"] = False
                 st.rerun()
 

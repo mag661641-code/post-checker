@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import calendar as _cal
 import datetime as dt
 import html
 import re
@@ -148,12 +149,14 @@ def render() -> None:
 
     # --- переключатель вида ---
     view = st.segmented_control(
-        "Вид", ["Посты", "Замечания"], key="posts_view",
+        "Вид", ["Посты", "Календарь", "Замечания"], key="posts_view",
         label_visibility="collapsed")
     view = view or "Посты"
 
     if view == "Посты":
         _view_posts(data, base, period)
+    elif view == "Календарь":
+        _view_calendar(data, base, period)
     else:
         _view_issues(data, base, period)
 
@@ -388,13 +391,12 @@ def _post_card(data: C.AppData, by_key: dict, sel_key: tuple) -> None:
         st.caption(meta)
         st.markdown(f"**{_text_preview(post, 80)}**")
 
-        # начало текста на сером фоне
-        excerpt = html.escape((post.text or "").strip()[:600]) or \
-            "(текст не заполнен)"
+        # полный текст поста на сером фоне (прокручивается)
+        excerpt = html.escape((post.text or "").strip()) or "(текст не заполнен)"
         st.markdown(
             f'<div style="padding:12px 14px;background:#F3F3F3;border-radius:4px;'
             f'font-size:14px;line-height:22px;white-space:pre-wrap;'
-            f'max-height:220px;overflow:auto">{excerpt}</div>',
+            f'max-height:360px;overflow:auto">{excerpt}</div>',
             unsafe_allow_html=True)
 
         # орфография для выбранного поста (кешируется)
@@ -434,17 +436,22 @@ def _issue_block(post: PostRecord, iss: Issue, n: int) -> None:
         name = _rule_name(iss.code, iss.message)
         st.markdown(f'{_tag(iss.level)}&nbsp; <b>{html.escape(name)}</b>',
                     unsafe_allow_html=True)
-        hint = iss.fix or (iss.message if name != iss.message else "")
-        if hint:
+        # что именно не так — конкретика из проверки
+        if iss.message:
             st.markdown(f'<span style="color:#464646;font-size:14px">'
-                        f'{html.escape(hint)}</span>', unsafe_allow_html=True)
+                        f'{html.escape(iss.message)}</span>',
+                        unsafe_allow_html=True)
+        # как исправить — если добавляет новое к сообщению
+        fix = (iss.fix or "").strip()
+        if fix and fix not in (iss.message or ""):
+            st.markdown(f'<span style="color:#464646;font-size:13px">'
+                        f'Как исправить: {html.escape(fix)}</span>',
+                        unsafe_allow_html=True)
         frag = _fragment_for_issue(iss)
-        if frag and frag in (post.text or ""):
-            st.markdown(
-                f'<span style="font-size:14px">Фрагмент: '
-                f'<mark style="background:#FFE26C;color:#1E1E1E;padding:0 3px;'
-                f'border-radius:2px">{html.escape(frag)}</mark></span>',
-                unsafe_allow_html=True)
+        frag_html = _frag_html(post.text or "", frag) if frag else None
+        if frag_html:
+            st.markdown(f'<span style="font-size:14px">Фрагмент: {frag_html}'
+                        f'</span>', unsafe_allow_html=True)
         # действия (сохранены прежние возможности)
         if iss.code == "spell_error":
             if st.button("Добавить слово",
@@ -460,6 +467,22 @@ def _issue_block(post: PostRecord, iss: Issue, n: int) -> None:
                 config_mod.add_ignored(iss.sheet, iss.code, chash, row=post.row)
                 C.persist_all()
                 st.rerun()
+
+
+def _frag_html(text: str, frag: str, words: int = 3):
+    """Показать фрагмент с парой слов до и после — понятно, где это в тексте."""
+    idx = (text or "").find(frag)
+    if idx == -1:
+        return None
+    before = text[:idx].split()
+    after = text[idx + len(frag):].split()
+    pre = " ".join(before[-words:])
+    post_ = " ".join(after[:words])
+    lead = "…" if len(before) > words else ""
+    tail = "…" if len(after) > words else ""
+    mark = (f'<mark style="background:#FFE26C;color:#1E1E1E;padding:0 3px;'
+            f'border-radius:2px">{html.escape(frag)}</mark>')
+    return (f'{lead}{html.escape(pre)} {mark} {html.escape(post_)}{tail}').strip()
 
 
 def _fragment_for_issue(iss: Issue):
@@ -575,6 +598,124 @@ def _no_date_block(data: C.AppData) -> None:
                  height=min(360, 60 + 35 * len(rows)),
                  column_config={"Начало текста":
                                 st.column_config.TextColumn(width="large")})
+
+
+# ---------------------------------------------------------------------------
+# Вкладка «Календарь»
+# ---------------------------------------------------------------------------
+def _view_calendar(data: C.AppData, base, period) -> None:
+    today = C.moscow_today()
+    year, month = period if isinstance(period, tuple) else (today.year, today.month)
+    brand_codes = list(data.cfg["brands"].keys())
+    rules = data.cfg["rules"]
+
+    total = len(base)
+    with_issues = sum(1 for _, iss in base if iss)
+    cnt = {lvl: sum(1 for _, iss in base for i in iss if i.level == lvl)
+           for lvl in _LEVELS}
+
+    bar = st.columns([6, 3], vertical_alignment="center")
+    with bar[0]:
+        st.markdown(
+            f'<div style="display:flex;gap:20px;align-items:center;flex-wrap:wrap;'
+            f'padding:10px 14px;border:1px solid #DFDFDF;border-radius:4px;'
+            f'font-size:14px"><span><b>{total}</b> постов · '
+            f'<b>{with_issues}</b> с замечаниями</span>'
+            f'<span>{_square(_LVL[Level.ERROR]["dot"])}<b>{cnt[Level.ERROR]}</b>'
+            f' ошибок</span>'
+            f'<span>{_square(_LVL[Level.WARNING]["dot"])}'
+            f'<b>{cnt[Level.WARNING]}</b> предупреждений</span>'
+            f'<span>{_square(_LVL[Level.ADVICE]["dot"])}<b>{cnt[Level.ADVICE]}</b>'
+            f' советов</span></div>', unsafe_allow_html=True)
+    with bar[1]:
+        st.pills("Бренд", ["Все"] + brand_codes, selection_mode="single",
+                 key="flt_brand", label_visibility="collapsed")
+
+    by_day: dict[int, list] = {}
+    for p, iss in base:
+        by_day.setdefault(p.date.day, []).append((p, iss))
+
+    days_with = sorted(by_day.keys())
+    cur = st.session_state.get("cal_day")
+    if cur not in by_day:
+        if (today.year, today.month) == (year, month) and today.day in by_day:
+            cur = today.day
+        else:
+            cur = days_with[0] if days_with else None
+        st.session_state["cal_day"] = cur
+
+    grid, aside = st.columns([2, 1], gap="medium")
+    with grid:
+        head = st.columns(7)
+        for i, wd in enumerate(["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]):
+            head[i].caption(wd)
+        for week in _cal.monthcalendar(year, month):
+            cols = st.columns(7)
+            for i, dnum in enumerate(week):
+                if dnum == 0:
+                    cols[i].markdown("&nbsp;", unsafe_allow_html=True)
+                    continue
+                _cal_cell(cols[i], dnum, by_day.get(dnum, []), rules,
+                          selected=(dnum == cur))
+    with aside:
+        _cal_aside(data, year, month, cur, by_day, rules)
+
+
+def _cal_cell(col, dnum: int, items, rules, selected: bool) -> None:
+    if col.button(str(dnum), key=f"cal_{dnum}", use_container_width=True,
+                  type="primary" if selected else "secondary"):
+        st.session_state["cal_day"] = dnum
+        st.rerun()
+    chips = ""
+    for p, iss in items[:3]:
+        s = _post_sev(iss)
+        dot = _square(_LVL[s]["dot"] if s else "#858585", 8)
+        chips += (f'<div style="display:flex;align-items:center;gap:4px;height:20px;'
+                  f'padding:0 4px;border:1px solid #DFDFDF;border-radius:4px;'
+                  f'font-size:11px;white-space:nowrap;overflow:hidden;'
+                  f'margin-bottom:3px">{dot}<b>{html.escape(p.brand)}</b>&nbsp;'
+                  f'{html.escape(C.norm_type(p.post_type, rules)[:8])}</div>')
+    extra = len(items) - 3
+    if extra > 0:
+        chips += f'<div style="font-size:11px;color:#464646">+{extra}</div>'
+    if chips:
+        col.markdown(chips, unsafe_allow_html=True)
+
+
+def _cal_aside(data: C.AppData, year: int, month: int, day, by_day, rules) -> None:
+    if day:
+        items = by_day.get(day, [])
+        n_iss = sum(len(iss) for _, iss in items)
+        d = dt.date(year, month, day)
+        with st.container(border=True):
+            st.markdown(f"**{d.day} {C.MONTHS_GEN[d.month]}, "
+                        f"{C.WEEKDAYS_FULL[d.weekday()]}**")
+            st.caption(f"{C.plural_posts(len(items))} · {n_iss} замечаний")
+            for p, iss in items:
+                s = _post_sev(iss)
+                dot = _square(_LVL[s]["dot"] if s else "#858585", 8)
+                with st.container(border=True):
+                    st.markdown(f'{dot}<b>{html.escape(p.brand)}</b> · '
+                                f'{html.escape(C.norm_type(p.post_type, rules))}',
+                                unsafe_allow_html=True)
+                    st.markdown(f'<span style="font-size:14px">'
+                                f'{html.escape(_text_preview(p, 70))}</span>',
+                                unsafe_allow_html=True)
+                    if iss:
+                        st.caption(" · ".join(_rule_name(i.code, i.message)
+                                              for i in iss[:3]))
+                    if st.button("Открыть", key=f"calopen_{p.sheet}_{p.row}",
+                                 type="tertiary"):
+                        st.session_state["sel_post"] = (p.sheet, p.row)
+                        st.session_state["force_view"] = "Посты"
+                        st.rerun()
+
+    brand_sel = st.session_state.get("flt_brand") or "Все"
+    no_date = [p for p in data.posts if not p.date
+               and (brand_sel == "Все" or p.brand == brand_sel)]
+    with st.container(border=True):
+        st.markdown(f"**Без даты · {C.plural_posts(len(no_date))}**")
+        st.caption("Их нет в календаре, пока в таблице не указана дата публикации.")
 
 
 # ---------------------------------------------------------------------------
