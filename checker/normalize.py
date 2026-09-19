@@ -137,6 +137,29 @@ def link_domain(url: str) -> str:
     return n.split("/", 1)[0] if n else ""
 
 
+_VIDEO_DOMAINS = {"youtube.com", "youtu.be", "rutube.ru", "vkvideo.ru"}
+
+
+def classify_link(url: str) -> str:
+    """Грубо определить тип содержимого по ссылке: video / gdoc / dzen / other.
+
+    Нужно, чтобы отличать пост-видео и пост-ссылку-на-документ от обычного
+    текста и не гонять текстовые проверки там, где текста в таблице нет.
+    """
+    d = link_domain(url)
+    low = str(url or "").lower()
+    if d in ("docs.google.com", "drive.google.com"):
+        return "gdoc"
+    if (d in _VIDEO_DOMAINS
+            or (d == "vk.com" and ("/video" in low or "/clip" in low))
+            or "dzen.ru/video" in low
+            or low.rstrip("/").endswith(".mp4")):
+        return "video"
+    if d == "dzen.ru":
+        return "dzen"
+    return "other"
+
+
 def is_private_tg_link(url: str) -> bool:
     """Ссылка вида t.me/c/2203619795/... — закрытый рабочий чат."""
     n = normalize_link(url)

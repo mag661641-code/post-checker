@@ -19,6 +19,59 @@ def _hashtags(text: str) -> list[str]:
     return re.findall(r"#[\wА-Яа-яЁё]+", text)
 
 
+_URL_RE = re.compile(r"(?:https?://|www\.)\S+", re.IGNORECASE)
+# служебные слова, которые часто стоят рядом со ссылкой и не считаются «текстом»
+_SERVICE_WORDS = {"видео", "ссылка", "ссылке", "ссылку", "пост", "текст",
+                  "клиент", "подпись", "смотрите", "смотреть", "здесь", "тут",
+                  "документ", "статья"}
+
+
+def _content_only_link(post: PostRecord) -> tuple[str, str] | None:
+    """Если в ячейке «Пост» по сути только ссылка (текста нет) — вернуть
+    (тип, url), иначе None. Тип: video / gdoc / dzen / other."""
+    text = post.text or ""
+    cand = list(_URL_RE.findall(text))
+    cand += [u for u in getattr(post, "text_links", []) if u]
+    cand += [s.get("link", "") for s in post.socials if s.get("link")]
+    cand = [u for u in cand if u]
+    if not cand:
+        return None
+    stripped = _URL_RE.sub(" ", text)
+    words = [w for w in re.findall(r"[^\W\d_]{2,}", stripped)
+             if w.lower() not in _SERVICE_WORDS]
+    if len(words) >= 5:
+        return None  # есть осмысленный текст — проверяем как обычно
+    kinds = [N.classify_link(u) for u in cand]
+    for pref in ("gdoc", "dzen", "video"):
+        if pref in kinds:
+            return pref, cand[kinds.index(pref)]
+    return "other", cand[0]
+
+
+def _link_only_issue(post: PostRecord, code: str, kind: str, url: str) -> Issue:
+    d = N.link_domain(url) or "ссылка"
+    if kind == "video":
+        return Issue(
+            post.sheet, post.row, "Пост", Level.ADVICE, "text_link_video",
+            f"Похоже, это видео-пост (ссылка на {d}). Текста в таблице нет — "
+            "текстовые проверки не выполнялись.",
+            "Если нужно проверить подпись к видео — вставьте её текст в таблицу.",
+            brand=code, post_type=post.post_type)
+    if kind == "gdoc":
+        msg = (f"Текст поста — в Google Документе ({d}), в таблицу не вставлен. "
+               "Вставьте текст в таблицу или откройте доступ сервису — "
+               "иначе проверить нельзя.")
+    elif kind == "dzen":
+        msg = (f"Текст поста — статья в Дзене ({d}). Текста в таблице нет, "
+               "проверьте её вручную.")
+    else:
+        msg = f"В ячейке только ссылка ({d}), текста нет — проверить нельзя."
+    return Issue(
+        post.sheet, post.row, "Пост", Level.WARNING, "text_link_content", msg,
+        "Вставьте текст поста в таблицу для автоматической проверки.",
+        brand=code, post_type=post.post_type)
+
+
 def _lines(text: str) -> list[str]:
     return text.split("\n")
 
@@ -740,6 +793,13 @@ def run_text_checks(posts_by_brand: dict[str, list[PostRecord]],
         for post in posts:
             if not post.text.strip():
                 continue
+            # «в ячейке только ссылка» (видео/документ/Дзен) — текста нет,
+            # текстовые проверки не применяем, выдаём одно понятное замечание
+            if toggles.get("text_is_link", True):
+                only = _content_only_link(post)
+                if only:
+                    issues.append(_link_only_issue(post, code, *only))
+                    continue
             for key, fn in TEXT_CHECKS:
                 if not toggles.get(key, True):
                     continue
