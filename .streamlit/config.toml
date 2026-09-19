@@ -1,0 +1,10 @@
+[server]
+# нужно для отдачи файлов из папки static/ (шрифты Proxima Nova)
+enableStaticServing = true
+
+[theme]
+primaryColor = "#1D42A5"
+backgroundColor = "#FEFEFE"
+secondaryBackgroundColor = "#F3F3F3"
+textColor = "#1E1E1E"
+font = "sans serif"

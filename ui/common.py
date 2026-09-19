@@ -102,6 +102,49 @@ def page_config() -> None:
                        layout="wide")
 
 
+# Дизайн-система ИМП: шрифт Proxima Nova (файлы в static/fonts, отдаются при
+# enableStaticServing), палитра и скругления. Палитра базовых цветов задаётся
+# в .streamlit/config.toml; здесь — шрифт и точечные правки под макет.
+_THEME_CSS = """
+<style>
+@font-face{font-family:'Proxima Nova';src:url('app/static/fonts/ProximaNova-Regular.ttf') format('truetype');font-weight:400;font-style:normal;font-display:swap}
+@font-face{font-family:'Proxima Nova';src:url('app/static/fonts/ProximaNova-Semibold.ttf') format('truetype');font-weight:600;font-style:normal;font-display:swap}
+@font-face{font-family:'Proxima Nova';src:url('app/static/fonts/ProximaNova-Bold.ttf') format('truetype');font-weight:800;font-style:normal;font-display:swap}
+
+html, body, .stApp, [data-testid="stAppViewContainer"], [data-testid="stSidebar"],
+button, input, textarea, select {
+  font-family:'Proxima Nova', -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif !important;
+}
+
+/* Кнопки и ссылки-кнопки: скругление 4px, без теней */
+.stButton > button, .stDownloadButton > button, .stLinkButton > a {
+  border-radius:4px; box-shadow:none;
+}
+.stButton > button:hover, .stDownloadButton > button:hover,
+.stLinkButton > a:hover { border-color:#2A53BB; }
+.stButton > button[kind="primary"]:hover,
+.stDownloadButton > button[kind="primary"]:hover {
+  background:#2A53BB !important; border-color:#2A53BB !important; color:#FEFEFE !important;
+}
+
+/* Навигация в сайдбаре: активный пункт — пилюля */
+[data-testid="stSidebarNav"] a { border-radius:4px; }
+[data-testid="stSidebarNav"] a[aria-current="page"] {
+  background:#DADFEC; color:#1D42A5; font-weight:600;
+}
+
+/* Ссылки */
+a, a:visited { color:#1D42A5; }
+a:hover { color:#2A53BB; }
+</style>
+"""
+
+
+def inject_theme_css() -> None:
+    """Один блок CSS дизайн-системы (шрифт, скругления, активный пункт меню)."""
+    st.markdown(_THEME_CSS, unsafe_allow_html=True)
+
+
 def require_auth() -> bool:
     """Экран входа с паролем. Возвращает True, если доступ разрешён."""
     try:
@@ -791,23 +834,60 @@ def _friendly_source_error(e: Exception) -> str:
     return "Не удалось загрузить таблицу. Проверьте ссылку и доступ."
 
 
-def sidebar() -> Optional[bytes]:
-    """Боковая панель: название, источник, обновление, экспорт. Возвращает bytes."""
-    st.sidebar.title("Проверка постов")
+def _current_email() -> Optional[str]:
+    """Email вошедшего пользователя, если Streamlit его отдаёт (иначе None)."""
+    try:
+        u = getattr(st, "user", None)
+        if u is None:
+            return None
+        email = getattr(u, "email", None)
+        if not email and hasattr(u, "get"):
+            email = u.get("email")
+        return email or None
+    except Exception:  # noqa: BLE001
+        return None
 
+
+def _sidebar_footer() -> None:
+    """Низ сайдбара: email пользователя и кнопка «Выйти» (если задан пароль)."""
+    try:
+        has_pw = bool(st.secrets.get("auth", {}).get("password"))  # type: ignore
+    except Exception:  # noqa: BLE001
+        has_pw = False
+    can_logout = has_pw and st.session_state.get("_authenticated")
+    email = _current_email()
+    if not email and not can_logout:
+        return
+    with st.sidebar:
+        st.divider()
+        row = st.columns([3, 1], vertical_alignment="center")
+        if email:
+            row[0].caption(email)
+        if can_logout:
+            if row[1].button("Выйти", key="logout"):
+                st.session_state["_authenticated"] = False
+                st.rerun()
+
+
+def sidebar() -> Optional[bytes]:
+    """Боковая панель: источник данных, обновление, вход/выход. Возвращает bytes."""
     # Excel-режим (запасной) имеет приоритет
     if st.session_state.get("excel_bytes"):
         st.session_state["file_bytes"] = st.session_state["excel_bytes"]
         st.session_state["file_name"] = st.session_state.get("excel_name", "Excel")
         st.session_state["sheet_source"] = {"is_excel": True}
         with st.sidebar:
-            st.info(f"Сейчас проверяется Excel-файл «"
-                    f"{st.session_state.get('excel_name', '')}»")
-            if st.button("Вернуться к Google-таблице", key="back_to_gs"):
-                for k in ("excel_bytes", "excel_name"):
-                    st.session_state.pop(k, None)
-                _reset_period()
-                st.rerun()
+            with st.container(border=True):
+                st.caption("Источник данных")
+                st.info(f"Сейчас проверяется Excel-файл «"
+                        f"{st.session_state.get('excel_name', '')}»")
+                if st.button("Вернуться к Google-таблице", key="back_to_gs",
+                             use_container_width=True):
+                    for k in ("excel_bytes", "excel_name"):
+                        st.session_state.pop(k, None)
+                    _reset_period()
+                    st.rerun()
+        _sidebar_footer()
         return st.session_state.get("file_bytes")
 
     # автозагрузка из Google-таблицы
@@ -815,36 +895,40 @@ def sidebar() -> Optional[bytes]:
     src = config_mod.load_source()
 
     with st.sidebar:
-        if src.get("url"):
-            if err:
-                st.error(err)
+        with st.container(border=True):
+            st.caption("Источник данных")
+            if src.get("url"):
+                if err:
+                    st.error(err)
+                else:
+                    st.markdown(f"**{st.session_state.get('file_name', '')}**")
+                    st.caption("Обновлено сегодня в "
+                               f"{st.session_state.get('file_time','')} МСК")
+                    if st.button("Обновить данные", key="refresh_src",
+                                 help="Загрузить таблицу заново",
+                                 use_container_width=True):
+                        e2 = fetch_source(force=True)
+                        if e2:
+                            st.error(e2)
+                        else:
+                            st.rerun()
+                    st.link_button("Открыть таблицу", src["url"],
+                                   use_container_width=True)
             else:
-                st.markdown(f"📗 **{st.session_state.get('file_name', '')}**")
-                st.caption(f"Данные на {st.session_state.get('file_time','')} (МСК)")
-                if st.button("🔄 Обновить данные", key="refresh_src",
-                             help="Загрузить таблицу заново",
-                             use_container_width=True):
-                    e2 = fetch_source(force=True)
-                    if e2:
-                        st.error(e2)
-                    else:
-                        st.rerun()
-                st.link_button("Открыть таблицу", src["url"],
-                               use_container_width=True)
-        else:
-            st.caption("Google-таблица не подключена. Откройте «Настройки» → "
-                       "«Источник данных».")
+                st.caption("Google-таблица не подключена. Откройте «Настройки» → "
+                           "«Источник данных».")
 
-        with st.expander("Загрузить Excel вместо таблицы"):
-            up = st.file_uploader("Файл Excel (.xlsx)", type=["xlsx"],
-                                  key="excel_uploader",
-                                  help="Запасной вариант, если таблица недоступна")
-            if up is not None:
-                st.session_state["excel_bytes"] = up.getvalue()
-                st.session_state["excel_name"] = up.name
-                _reset_period()
-                st.rerun()
+            with st.expander("Загрузить Excel вместо таблицы"):
+                up = st.file_uploader("Файл Excel (.xlsx)", type=["xlsx"],
+                                      key="excel_uploader",
+                                      help="Запасной вариант, если таблица недоступна")
+                if up is not None:
+                    st.session_state["excel_bytes"] = up.getvalue()
+                    st.session_state["excel_name"] = up.name
+                    _reset_period()
+                    st.rerun()
 
+    _sidebar_footer()
     return st.session_state.get("file_bytes")
 
 
@@ -858,10 +942,18 @@ def sheet_link(row: Optional[int], sheet_name: str) -> Optional[str]:
     return gsheets.open_in_sheet_url(src["id"], gid, row)
 
 
-def sidebar_download(data: AppData, filtered: list[tuple[PostRecord, list[Issue]]],
-                     period: Any) -> None:
-    """Кнопка скачивания отчёта за выбранный месяц с учётом фильтров."""
-    # собрать замечания: по отфильтрованным постам + реестр за месяц
+REPORT_MIME = ("application/vnd.openxmlformats-officedocument."
+               "spreadsheetml.sheet")
+
+
+def build_report_bytes(data: AppData,
+                       filtered: list[tuple[PostRecord, list[Issue]]],
+                       period: Any) -> Optional[tuple[bytes, str, str]]:
+    """Собрать отчёт-Excel за месяц с учётом фильтров.
+
+    Возвращает (xlsx-байты, имя файла, короткая подпись) или None при ошибке.
+    Логика и формат отчёта прежние — только вынесены для переиспользования.
+    """
     issues: list[Issue] = []
     for _, p_issues in filtered:
         issues.extend(p_issues)
@@ -870,25 +962,18 @@ def sidebar_download(data: AppData, filtered: list[tuple[PostRecord, list[Issue]
             if period_matches(issue_date(i, data), period):
                 issues.append(i)
 
-    total_posts = len(filtered)
-    summary = summarize(issues, total_posts)
+    summary = summarize(issues, len(filtered))
     try:
         xlsx = report_mod.build_xlsx(issues, summary)
     except Exception:  # noqa: BLE001
-        return
+        return None
 
     if period is None:
         fname = "Проверка_постов_все.xlsx"
-        label = "📥 Скачать отчёт за все месяцы"
     else:
         y, m = period
         fname = f"Проверка_постов_{y}-{m:02d}.xlsx"
-        label = f"📥 Скачать отчёт за {fmt_month_lower(y, m)}"
-
-    st.sidebar.download_button(
-        label, data=xlsx, file_name=fname,
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        use_container_width=True, key="dl_report")
+    return xlsx, fname, "Скачать отчёт"
 
 
 # ---------------------------------------------------------------------------

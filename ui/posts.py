@@ -1,5 +1,9 @@
-"""Экран «Проверка постов»: шапка, выбор месяца, фильтры, вкладки
-«Посты» (список + карточка) и «Все замечания».
+"""Экран «Проверка постов» — дизайн-система ИМП.
+
+Шапка (месяц, навигация, орфография, отчёт) → переключатель «Посты / Замечания».
+Вкладка «Посты»: KPI-карточки-фильтры, строка фильтров, список + карточка поста.
+Вкладка «Замечания»: правила по уровням + разбор выбранного правила.
+Меняется только интерфейс; проверки, загрузка данных и отчёт — из пакета checker.
 """
 from __future__ import annotations
 
@@ -10,24 +14,61 @@ import re
 import pandas as pd
 import streamlit as st
 
-from checker import config_mod, loader_mod
+from checker import config_mod
 from checker.models import Issue, Level, PostRecord
-from checker import normalize as N
 from ui import common as C
+
+# Названия правил по коду (для карточки и вкладки «Замечания»).
+try:
+    from ui.settings import CHECK_META
+    _CODE_NAME: dict[str, str] = {}
+    for _key, _sec, _name, _expl, _codes, _dl in CHECK_META:
+        for _c in _codes:
+            _CODE_NAME.setdefault(_c, _name)
+except Exception:  # noqa: BLE001
+    _CODE_NAME = {}
+_CODE_NAME.setdefault("spell_error", "Орфографическая ошибка")
 
 _EMOJI_RE = re.compile(
     "[\U0001F000-\U0001FAFF\U00002600-\U000027BF\U0001F1E6-\U0001F1FF"
     "\U00002190-\U000021FF\U00002B00-\U00002BFF️]")
 
-_LEVEL_BG = {Level.ERROR: "#f8cbad", Level.WARNING: "#ffe699",
-             Level.ADVICE: None}  # совет — подчёркивание
+# Цвета уровней замечаний (дизайн-система ИМП).
+_LVL = {
+    Level.ERROR: {"dot": "#D42525", "bg": "#EBD7D7", "fg": "#C01616",
+                  "name": "Ошибка", "plural": "Ошибки", "code": "err"},
+    Level.WARNING: {"dot": "#F0AC17", "bg": "#FFE26C", "fg": "#1E1E1E",
+                    "name": "Предупреждение", "plural": "Предупреждения",
+                    "code": "warn"},
+    Level.ADVICE: {"dot": "#1D42A5", "bg": "#DADFEC", "fg": "#1D42A5",
+                   "name": "Совет", "plural": "Советы", "code": "tip"},
+}
+_LEVELS = [Level.ERROR, Level.WARNING, Level.ADVICE]
+_SEV_LEVEL = {"err": Level.ERROR, "warn": Level.WARNING, "tip": Level.ADVICE}
+
+_POSTS_CSS = """
+<style>
+/* KPI-карточки-фильтры */
+.st-key-kpi_all button,.st-key-kpi_err button,.st-key-kpi_warn button,.st-key-kpi_tip button{
+  min-height:88px;display:flex;flex-direction:column;align-items:flex-start;gap:2px;
+  text-align:left;border:1px solid #DFDFDF;border-radius:4px;background:#FEFEFE;
+  padding:14px 16px;box-shadow:none;font-weight:400;color:#1E1E1E}
+.st-key-kpi_all button p,.st-key-kpi_err button p,.st-key-kpi_warn button p,
+.st-key-kpi_tip button p{text-align:left;width:100%;margin:0}
+.st-key-kpi_err button{border-left:3px solid #D42525}
+.st-key-kpi_warn button{border-left:3px solid #F0AC17}
+.st-key-kpi_tip button{border-left:3px solid #1D42A5}
+.st-key-kpi_all button:hover,.st-key-kpi_err button:hover,
+.st-key-kpi_warn button:hover,.st-key-kpi_tip button:hover{border-color:#1D42A5}
+</style>
+"""
 
 
 def _strip_emoji(text: str) -> str:
     return _EMOJI_RE.sub("", text or "").strip()
 
 
-def _text_preview(post: PostRecord, limit: int = 50) -> str:
+def _text_preview(post: PostRecord, limit: int = 70) -> str:
     t = _strip_emoji(post.text)
     if not t:
         return "(текст не заполнен)"
@@ -35,176 +76,428 @@ def _text_preview(post: PostRecord, limit: int = 50) -> str:
     return t[:limit] + ("…" if len(t) > limit else "")
 
 
+def _rule_name(code: str, fallback: str = "") -> str:
+    return _CODE_NAME.get(code, fallback or code)
+
+
+def _post_sev(issues: list[Issue]):
+    for lvl in _LEVELS:
+        if any(i.level == lvl for i in issues):
+            return lvl
+    return None
+
+
+def _square(color: str, size: int = 10) -> str:
+    return (f'<span style="display:inline-block;width:{size}px;height:{size}px;'
+            f'border-radius:2px;background:{color};margin-right:8px;'
+            f'vertical-align:middle"></span>')
+
+
+def _tag(level: Level) -> str:
+    d = _LVL[level]
+    return (f'<span style="display:inline-flex;align-items:center;height:22px;'
+            f'padding:0 8px;border-radius:4px;background:{d["bg"]};'
+            f'color:{d["fg"]};font-size:12px;font-weight:600;'
+            f'white-space:nowrap">{d["name"]}</span>')
+
+
+# ---------------------------------------------------------------------------
+# Точка входа
+# ---------------------------------------------------------------------------
 def render() -> None:
     file_bytes = st.session_state.get("file_bytes")
     if not file_bytes:
         C.empty_no_file()
         return
 
+    st.markdown(_POSTS_CSS, unsafe_allow_html=True)
+
     data = C.build_app_data(file_bytes)
     C.ensure_period(data)
     period = C.current_period()
 
-    # ---- шапка ----
-    st.title(f"Проверка за {C.period_title(period)}")
+    # --- состояние экрана ---
+    # отложенное переключение вида (нельзя менять ключ виджета после его создания)
+    pending = st.session_state.pop("force_view", None)
+    if pending:
+        st.session_state["posts_view"] = pending
+    st.session_state.setdefault("posts_view", "Посты")
+    st.session_state.setdefault("sev", "all")
+    st.session_state.setdefault("flt_brand", "Все")
+    st.session_state.setdefault("flt_status", "Все")
+    st.session_state.setdefault("flt_only", True)
+    st.session_state.setdefault("flt_sort", "По дате")
+    st.session_state.setdefault("flt_search", "")
+    st.session_state.setdefault("verified", set())
+    st.session_state.setdefault("sel_post", None)
+    st.session_state.setdefault("sel_rule", None)
 
-    C.period_selector(data, key_prefix="posts")
-    _period_line(data, period)
+    brand_codes = list(data.cfg["brands"].keys())
+    brand_sel = st.session_state.get("flt_brand") or "Все"
+    brands = brand_codes if brand_sel == "Все" else [brand_sel]
+    status_sel = st.session_state.get("flt_status") or "Все"
+    status = [] if status_sel == "Все" else [status_sel]
+    search = (st.session_state.get("flt_search") or "").strip().lower()
 
-    filters = C.filters_bar(data)
-    filtered = C.apply_filters(data, filters, period)
+    base = C.apply_filters(data, {"brands": brands, "status": status,
+                                  "search": search, "levels": [],
+                                  "only_issues": False}, period)
 
-    # метрики
-    all_issues = [i for _, iss in filtered for i in iss]
-    m = st.columns(4)
-    m[0].metric("Постов в выборке", len(filtered))
-    m[1].metric("🔴 Ошибки", sum(1 for i in all_issues if i.level == Level.ERROR))
-    m[2].metric("🟡 Предупреждения",
-                sum(1 for i in all_issues if i.level == Level.WARNING))
-    m[3].metric("🔵 Советы", sum(1 for i in all_issues if i.level == Level.ADVICE))
+    # --- шапка ---
+    _header(data, period, base)
 
-    _upcoming_hint(filtered, period)
+    # --- переключатель вида ---
+    view = st.segmented_control(
+        "Вид", ["Посты", "Замечания"], key="posts_view",
+        label_visibility="collapsed")
+    view = view or "Посты"
 
-    tab_posts, tab_all = st.tabs(["Посты", "Все замечания"])
-    with tab_posts:
-        _tab_posts(data, filtered, filters)
-    with tab_all:
-        _tab_all_issues(data, filtered)
-
-
-# ---------------------------------------------------------------------------
-# Посты без даты
-# ---------------------------------------------------------------------------
-def _period_line(data: C.AppData, period) -> None:
-    """Одна строка под выбором периода: сколько постов за месяц и без даты."""
-    total = len(C.posts_in_period(data, period))
-    no_date = [p for p in data.posts if not p.date]
-    if total == 0:
-        base = f"За {C.period_title(period)} постов в таблице пока нет"
+    if view == "Посты":
+        _view_posts(data, base, period)
     else:
-        base = f"За {C.period_title(period)}: {C.plural_posts(total)}"
-    if no_date:
-        st.caption(f"{base} · ещё {len(no_date)} без даты — см. блок внизу")
-    else:
-        st.caption(base)
-
-
-def _no_date_block(data: C.AppData, filters: dict) -> None:
-    """Отдельный блок внизу вкладки: посты без даты, раскрывающимися карточками."""
-    rules = data.cfg["rules"]
-    brands = filters.get("brands") or list(data.cfg["brands"].keys())
-    no_date = [p for p in data.posts if not p.date and p.brand in brands]
-    if not no_date:
-        return
-
-    st.divider()
-    st.markdown(f"#### ⚠️ Посты без даты · {C.plural_posts(len(no_date))}")
-    st.caption("У этих постов не заполнена дата — они не попадают ни в один "
-               "месяц. Проставьте дату в таблице.")
-    no_date = sorted(no_date, key=lambda p: (p.brand, p.sheet, p.row))
-    for p in no_date:
-        issues = [i for i in data.issues_by_post.get((p.sheet, p.row), [])
-                  if i.level != Level.TECH]
-        with st.expander(_post_expander_title(p, issues, rules)):
-            _post_card(data, p, issues)
+        _view_issues(data, base, period)
 
 
 # ---------------------------------------------------------------------------
-# Подсказка про ближайшие дни
+# Шапка
 # ---------------------------------------------------------------------------
-def _upcoming_hint(filtered, period) -> None:
+def _header(data: C.AppData, period, base) -> None:
     today = C.moscow_today()
-    if period != (today.year, today.month):
-        return
-    horizon = today + dt.timedelta(days=2)
-    cnt = 0
-    for p, iss in filtered:
-        if p.date and today <= p.date <= horizon and \
-           any(i.level == Level.ERROR for i in iss):
-            cnt += 1
-    if cnt:
-        st.warning(f"{cnt} постов с ошибками запланированы на ближайшие 2 дня.")
+    if isinstance(period, tuple):
+        year, month = period
+    else:
+        year, month = today.year, today.month
+
+    note = st.session_state.get("period_note")
+    if note:
+        st.info(note)
+
+    left, right = st.columns([3, 2], vertical_alignment="bottom")
+    with left:
+        st.caption("Проверка постов")
+        py, pm = C._shift_month(year, month, -1)
+        ny, nm = C._shift_month(year, month, +1)
+        row = st.columns([5, 2, 2], vertical_alignment="center")
+        row[0].markdown(
+            f"<h1 style='margin:0;font-size:28px;font-weight:600'>"
+            f"{C.fmt_month(year, month)}</h1>", unsafe_allow_html=True)
+        if row[1].button(f"← {C.MONTHS_NOM[pm]}", key="mprev",
+                         use_container_width=True):
+            _set_period(py, pm)
+        if row[2].button(f"{C.MONTHS_NOM[nm]} →", key="mnext",
+                         use_container_width=True):
+            _set_period(ny, nm)
+
+        total = len(C.posts_in_period(data, period))
+        no_date = [p for p in data.posts if not p.date]
+        line = f"{C.plural_posts(total)} с датой в этом месяце"
+        if no_date:
+            line += f" · ещё {len(no_date)} без даты"
+        st.caption(line)
+
+    with right:
+        b = st.columns(2)
+        if b[0].button("Проверить орфографию", key="spell_all_btn",
+                       use_container_width=True):
+            _spell_all_fragment(data, base)
+        report = C.build_report_bytes(data, base, period)
+        if report:
+            xlsx, fname, label = report
+            b[1].download_button(label, data=xlsx, file_name=fname,
+                                 mime=C.REPORT_MIME, use_container_width=True,
+                                 type="primary", key="dl_report")
+
+
+def _set_period(year: int, month: int) -> None:
+    st.session_state["period"] = (year, month)
+    st.session_state["period_note"] = ""
+    st.rerun()
 
 
 # ---------------------------------------------------------------------------
 # Вкладка «Посты»
 # ---------------------------------------------------------------------------
-def _tab_posts(data: C.AppData, filtered, filters) -> None:
-    rules = data.cfg["rules"]
+def _view_posts(data: C.AppData, base, period) -> None:
+    # --- KPI-карточки ---
+    total = len(base)
+    with_issues = sum(1 for _, iss in base if iss)
+    cnt = {lvl: sum(1 for _, iss in base for i in iss if i.level == lvl)
+           for lvl in _LEVELS}
+    sev = st.session_state.get("sev", "all")
 
-    if not filtered:
-        st.success("Постов с замечаниями нет 🎉")
-        st.button("Сбросить фильтры", on_click=C._reset_filters,
-                  key="reset_empty")
-        _no_date_block(data, filters)
+    active_css = {
+        "all": "kpi_all", "err": "kpi_err", "warn": "kpi_warn", "tip": "kpi_tip",
+    }.get(sev)
+    if active_css:
+        st.markdown(f"<style>.st-key-{active_css} button{{background:#DADFEC;"
+                    f"border-color:#1D42A5}}</style>", unsafe_allow_html=True)
+
+    k = st.columns(4)
+    if k[0].button(f"Все посты\n\n**{total}**\n\n{with_issues} из них с замечаниями",
+                   key="kpi_all", use_container_width=True):
+        _set_sev("all")
+    if k[1].button(f"Ошибки\n\n**{cnt[Level.ERROR]}**\n\nисправить до публикации",
+                   key="kpi_err", use_container_width=True):
+        _set_sev("err")
+    if k[2].button(f"Предупреждения\n\n**{cnt[Level.WARNING]}**\n\n"
+                   f"желательно поправить", key="kpi_warn",
+                   use_container_width=True):
+        _set_sev("warn")
+    tip_sub = "всё в порядке" if cnt[Level.ADVICE] == 0 else "необязательно"
+    if k[3].button(f"Советы\n\n**{cnt[Level.ADVICE]}**\n\n{tip_sub}",
+                   key="kpi_tip", use_container_width=True):
+        _set_sev("tip")
+
+    # --- строка фильтров ---
+    brand_codes = list(data.cfg["brands"].keys())
+    f = st.columns([6, 4, 3], vertical_alignment="center")
+    with f[0]:
+        fr = st.columns([1, 5], vertical_alignment="center")
+        fr[0].caption("Бренд")
+        fr[1].pills("Бренд", ["Все"] + brand_codes, selection_mode="single",
+                    key="flt_brand", label_visibility="collapsed")
+    with f[1]:
+        sr = st.columns([1, 4], vertical_alignment="center")
+        sr[0].caption("Статус")
+        sr[1].pills("Статус", ["Все", "Готово", "Выложено"],
+                    selection_mode="single", key="flt_status",
+                    label_visibility="collapsed")
+    with f[2]:
+        st.toggle("Только с замечаниями", key="flt_only")
+
+    if _filters_active():
+        st.button("Сбросить фильтры", on_click=_reset_filters, key="reset_flt")
+
+    # --- список постов (с учётом уровня и «только с замечаниями») ---
+    only = st.session_state.get("flt_only", True)
+    disp = []
+    for p, iss in base:
+        if sev in _SEV_LEVEL and not any(i.level == _SEV_LEVEL[sev] for i in iss):
+            continue
+        if only and not iss:
+            continue
+        disp.append((p, iss))
+
+    if st.session_state.get("flt_sort") == "Сначала ошибки":
+        disp.sort(key=lambda x: (0 if _post_sev(x[1]) == Level.ERROR else 1,
+                                 x[0].date or dt.date.max))
+    else:
+        disp.sort(key=lambda x: (x[0].date or dt.date.max, x[0].sheet, x[0].row))
+
+    if not disp:
+        st.success("Постов по выбранным условиям нет")
+        _no_date_block(data)
         return
 
-    def err_count(iss):
-        return sum(1 for i in iss if i.level == Level.ERROR)
+    left, right = st.columns([1.6, 1], gap="medium")
+    with left:
+        sel_key = _post_list(data, disp)
+    with right:
+        _post_card(data, dict(((p.sheet, p.row), (p, iss)) for p, iss in disp),
+                   sel_key)
 
-    # панель управления над списком: сортировка · счётчик · развернуть · орфография
-    top = st.columns([4, 2, 3, 3], vertical_alignment="center")
-    with top[0]:
-        sort_mode = st.segmented_control(
-            "Сортировка", ["По дате", "Сначала с ошибками"],
-            default="По дате", key="sort_mode", label_visibility="collapsed")
-    with top[1]:
-        st.caption(C.plural_posts(len(filtered)))
-    with top[2]:
-        exp = st.columns(2)
-        if exp[0].button("Развернуть все", key="expand_all",
-                         use_container_width=True):
-            st.session_state["posts_expanded"] = True
-        if exp[1].button("Свернуть все", key="collapse_all",
-                         use_container_width=True):
-            st.session_state["posts_expanded"] = False
-    with top[3]:
-        spell_clicked = st.button("🔤 Проверить орфографию во всех",
-                                  key="spell_all_btn", type="tertiary",
-                                  use_container_width=True)
-
-    sort_mode = sort_mode or "По дате"
-    if sort_mode == "Сначала с ошибками":
-        filtered = sorted(filtered, key=lambda x: (-err_count(x[1]),
-                          x[0].date or dt.date.max))
-    else:
-        filtered = sorted(filtered, key=lambda x: (x[0].date or dt.date.max,
-                          x[0].sheet, x[0].row))
-
-    if spell_clicked:
-        _spell_all_fragment(data, filtered)
-
-    expanded = st.session_state.get("posts_expanded", False)
-    for post, p_issues in filtered:
-        with st.expander(_post_expander_title(post, p_issues, rules),
-                         expanded=expanded):
-            _post_card(data, post, p_issues)
-
-    _no_date_block(data, filters)
+    _no_date_block(data)
 
 
-def _post_expander_title(post: PostRecord, iss: list[Issue], rules: dict) -> str:
-    """Заголовок раскрывающегося блока: замечания · дата · бренд · тип · текст."""
-    date = C.fmt_date_compact(post.date) or "без даты"
-    ptype = C.norm_type(post.post_type, rules)
-    head = " · ".join(x for x in (f"📅 {date}", post.brand, ptype) if x)
-    return f"{_issue_badges(iss)}  {head} — {_text_preview(post, 60)}"
+def _set_sev(code: str) -> None:
+    st.session_state["sev"] = code
+    st.rerun()
 
 
-def _issue_badges(iss: list[Issue]) -> str:
-    """Счётчики замечаний одной строкой: «🔴 2  🟡 1», нули не показываем."""
-    counts = [
-        ("🔴", sum(1 for i in iss if i.level == Level.ERROR)),
-        ("🟡", sum(1 for i in iss if i.level == Level.WARNING)),
-        ("🔵", sum(1 for i in iss if i.level == Level.ADVICE)),
-    ]
-    parts = [f"{emoji} {n}" for emoji, n in counts if n]
-    return "  ".join(parts) if parts else "✅"
+def _filters_active() -> bool:
+    return bool(st.session_state.get("flt_brand", "Все") != "Все"
+                or st.session_state.get("flt_status", "Все") != "Все"
+                or not st.session_state.get("flt_only", True)
+                or st.session_state.get("flt_search")
+                or st.session_state.get("sev", "all") != "all")
+
+
+def _reset_filters() -> None:
+    st.session_state["flt_brand"] = "Все"
+    st.session_state["flt_status"] = "Все"
+    st.session_state["flt_only"] = True
+    st.session_state["flt_search"] = ""
+    st.session_state["sev"] = "all"
+
+
+def _post_list(data: C.AppData, disp) -> tuple:
+    rules = data.cfg["rules"]
+    tb = st.columns([3, 5, 4], vertical_alignment="center")
+    tb[0].markdown(f"**{C.plural_posts(len(disp))}**")
+    tb[1].segmented_control("Сортировка", ["По дате", "Сначала ошибки"],
+                            key="flt_sort", label_visibility="collapsed")
+    tb[2].text_input("Поиск", key="flt_search", label_visibility="collapsed",
+                     placeholder="Поиск по тексту поста")
+
+    verified = st.session_state["verified"]
+    rows, sev_colors = [], []
+    for p, iss in disp:
+        s = _post_sev(iss)
+        sev_colors.append(_LVL[s]["dot"] if s else "#858585")
+        mark = "✓ " if (p.sheet, p.row) in verified else ""
+        rows.append({
+            "Замеч.": f"■ {len(iss)}" if iss else "—",
+            "Дата": C.fmt_date_compact(p.date) or "без даты",
+            "Бренд": p.brand,
+            "Рубрика": C.norm_type(p.post_type, rules),
+            "Текст поста": mark + _text_preview(p, 90),
+        })
+    df = pd.DataFrame(rows)
+    styler = df.style.apply(
+        lambda col: [f"color:{c};font-weight:600" for c in sev_colors],
+        subset=["Замеч."])
+    event = st.dataframe(
+        styler, use_container_width=True, hide_index=True, height=520,
+        on_select="rerun", selection_mode="single-row",
+        column_config={
+            "Замеч.": st.column_config.TextColumn(width="small"),
+            "Дата": st.column_config.TextColumn(width="small"),
+            "Бренд": st.column_config.TextColumn(width="small"),
+            "Рубрика": st.column_config.TextColumn(width="medium"),
+            "Текст поста": st.column_config.TextColumn(width="large"),
+        })
+
+    keys = [(p.sheet, p.row) for p, _ in disp]
+    sel_rows = event.selection.rows if event and event.selection else []
+    if sel_rows:
+        st.session_state["sel_post"] = keys[sel_rows[0]]
+
+    cur = st.session_state.get("sel_post")
+    if cur not in keys:
+        # по умолчанию — первый пост с ошибкой, иначе первый
+        cur = next((keys[i] for i, (_, iss) in enumerate(disp)
+                    if _post_sev(iss) == Level.ERROR), keys[0])
+        st.session_state["sel_post"] = cur
+    return cur
+
+
+# ---------------------------------------------------------------------------
+# Карточка поста
+# ---------------------------------------------------------------------------
+def _post_card(data: C.AppData, by_key: dict, sel_key: tuple) -> None:
+    post, issues = by_key[sel_key]
+    rules = data.cfg["rules"]
+    verified = st.session_state["verified"]
+
+    with st.container(border=True):
+        rubric = C.norm_type(post.post_type, rules)
+        meta = " · ".join(x for x in (C.fmt_date_compact(post.date) or "без даты",
+                                      post.brand, rubric) if x)
+        if post.date_note:
+            meta += f" · {post.date_note}"
+        st.caption(meta)
+        st.markdown(f"**{_text_preview(post, 80)}**")
+
+        # начало текста на сером фоне
+        excerpt = html.escape((post.text or "").strip()[:600]) or \
+            "(текст не заполнен)"
+        st.markdown(
+            f'<div style="padding:12px 14px;background:#F3F3F3;border-radius:4px;'
+            f'font-size:14px;line-height:22px;white-space:pre-wrap;'
+            f'max-height:220px;overflow:auto">{excerpt}</div>',
+            unsafe_allow_html=True)
+
+        # орфография для выбранного поста (кешируется)
+        all_issues = issues + _spell_issues(data, post)
+        order = {Level.ERROR: 0, Level.WARNING: 1, Level.ADVICE: 2, Level.TECH: 3}
+        all_issues = sorted(all_issues, key=lambda i: order.get(i.level, 9))
+
+        st.markdown(f"**Замечания · {len(all_issues)}**")
+        if not all_issues:
+            st.success("Замечаний нет")
+        for n, iss in enumerate(all_issues):
+            _issue_block(post, iss, n)
+
+        # фото
+        _photos(post)
+
+        # кнопки
+        st.write("")
+        cols = st.columns(2)
+        link = C.sheet_link(post.row, post.sheet)
+        if link:
+            cols[0].link_button("Открыть в таблице", link,
+                                use_container_width=True)
+        is_done = sel_key in verified
+        label = "Снять отметку" if is_done else "Отметить проверенным"
+        if cols[1].button(label, key="mark_done", use_container_width=True,
+                          type="secondary" if is_done else "primary"):
+            if is_done:
+                verified.discard(sel_key)
+            else:
+                verified.add(sel_key)
+            st.rerun()
+
+
+def _issue_block(post: PostRecord, iss: Issue, n: int) -> None:
+    with st.container(border=True):
+        name = _rule_name(iss.code, iss.message)
+        st.markdown(f'{_tag(iss.level)}&nbsp; <b>{html.escape(name)}</b>',
+                    unsafe_allow_html=True)
+        hint = iss.fix or (iss.message if name != iss.message else "")
+        if hint:
+            st.markdown(f'<span style="color:#464646;font-size:14px">'
+                        f'{html.escape(hint)}</span>', unsafe_allow_html=True)
+        frag = _fragment_for_issue(iss)
+        if frag and frag in (post.text or ""):
+            st.markdown(
+                f'<span style="font-size:14px">Фрагмент: '
+                f'<mark style="background:#FFE26C;color:#1E1E1E;padding:0 3px;'
+                f'border-radius:2px">{html.escape(frag)}</mark></span>',
+                unsafe_allow_html=True)
+        # действия (сохранены прежние возможности)
+        if iss.code == "spell_error":
+            if st.button("Добавить слово",
+                         key=f"wl_{post.sheet}_{post.row}_{n}",
+                         type="tertiary", help="Добавить в словарь орфографии"):
+                config_mod.add_word_to_whitelist(iss.extra.get("word", ""))
+                C.persist_all()
+                st.rerun()
+        else:
+            if st.button("Не ошибка", key=f"ig_{post.sheet}_{post.row}_{n}",
+                         type="tertiary", help="Скрыть это замечание"):
+                chash = config_mod.content_hash(post.text)
+                config_mod.add_ignored(iss.sheet, iss.code, chash, row=post.row)
+                C.persist_all()
+                st.rerun()
+
+
+def _fragment_for_issue(iss: Issue):
+    m = re.search(r"«([^»]+)»", iss.message)
+    if m:
+        return m.group(1)
+    m = re.search(r"\[[^\]]+\]", iss.message)
+    if m:
+        return m.group(0)
+    m = re.search(r"#[\wА-Яа-яЁё]+", iss.message)
+    if m:
+        return m.group(0)
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Орфография
+# ---------------------------------------------------------------------------
+def _spell_issues(data: C.AppData, post: PostRecord) -> list[Issue]:
+    if not (post.text or "").strip():
+        return []
+    status, words = C.spell_for_post(post, data.cfg)
+    if status == "unavailable":
+        return []
+    out = []
+    for w in words:
+        variants = ", ".join(w["variants"]) or "нет вариантов"
+        out.append(Issue(post.sheet, post.row, "Пост", Level.WARNING,
+                         "spell_error",
+                         f"Возможная опечатка: «{w['word']}». Варианты: {variants}.",
+                         "Проверьте слово или добавьте его в словарь.",
+                         brand=post.brand, extra={"word": w["word"]}))
+    return out
 
 
 @st.fragment
-def _spell_all_fragment(data: C.AppData, filtered) -> None:
-    posts = [p for p, _ in filtered if (p.text or "").strip()]
+def _spell_all_fragment(data: C.AppData, base) -> None:
+    posts = [p for p, _ in base if (p.text or "").strip()]
     total = len(posts) or 1
     with st.status("Проверяем орфографию…", expanded=True) as status:
         unavailable = False
@@ -225,181 +518,12 @@ def _spell_all_fragment(data: C.AppData, filtered) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Карточка поста
+# Фото
 # ---------------------------------------------------------------------------
-def _post_card(data: C.AppData, post: PostRecord, issues: list[Issue]) -> None:
-    rules = data.cfg["rules"]
-    ptype = C.norm_type(post.post_type, rules)
-
-    # 1. шапка — заголовок и строка с мета + кнопками
-    if post.date:
-        st.subheader(f"📅 {C.fmt_date_full(post.date)} · {post.brand} · {ptype}")
-    else:
-        st.subheader(f"📅 :red[Дата не указана] · {post.brand} · {ptype}")
-
-    status = data.post_status.get((post.sheet, post.row), "")
-    meta = f'Лист «{post.sheet}», строка {post.row}'
-    if post.date_note:
-        meta += f" · {post.date_note}"
-    plats = _platform_names(post)
-    if plats:
-        meta += " · Площадки: " + ", ".join(plats)
-    if status:
-        meta += f" · Статус: {status}"
-
-    hc = st.columns([6, 2, 2], vertical_alignment="center")
-    hc[0].caption(meta)
-    link = C.sheet_link(post.row, post.sheet)
-    if link:
-        hc[1].link_button("Открыть в таблице", link, use_container_width=True)
-    if post.text:
-        with hc[2].popover("📋 Копировать текст", use_container_width=True):
-            st.code(post.text, language=None)
-
-    # 2. текст с подсветкой
-    st.markdown(_highlight(post.text, issues), unsafe_allow_html=True)
-
-    # орфография — по кнопке, чтобы не обращаться к сервису сразу для всех
-    # раскрытых постов (результат кешируется)
-    spell_key = f"spell_on_{post.sheet}_{post.row}"
-    if (post.text or "").strip() and not st.session_state.get(spell_key):
-        if st.button("🔤 Проверить орфографию",
-                     key=f"spellbtn_{post.sheet}_{post.row}", type="tertiary"):
-            st.session_state[spell_key] = True
-            st.rerun()
-        spell_issues = []
-    else:
-        spell_issues = _spell_issues(data, post)
-
-    # 3. замечания
-    all_issues = issues + spell_issues
-    _issue_list(data, post, all_issues)
-
-    # 4. фото
-    _photos(post)
-
-
-def _platform_names(post: PostRecord) -> list[str]:
-    icons = {"t.me": "Telegram", "vk.com": "VK", "ok.ru": "OK",
-             "max.ru": "Max", "dzen.ru": "Дзен"}
-    seen: list[str] = []
-    for s in post.socials:
-        name = icons.get(N.link_domain(s.get("link", "")))
-        if name and name not in seen:
-            seen.append(name)
-    return seen
-
-
-def _fragment_for_issue(iss: Issue) -> str | None:
-    m = re.search(r"«([^»]+)»", iss.message)
-    if m:
-        return m.group(1)
-    m = re.search(r"\[[^\]]+\]", iss.message)
-    if m:
-        return m.group(0)
-    m = re.search(r"#[\wА-Яа-яЁё]+", iss.message)
-    if m:
-        return m.group(0)
-    return None
-
-
-def _highlight(text: str, issues: list[Issue]) -> str:
-    safe = html.escape(text or "")
-    # подсвечиваем по одному вхождению каждого найденного фрагмента
-    for iss in issues:
-        frag = _fragment_for_issue(iss)
-        if not frag:
-            continue
-        frag_safe = html.escape(frag)
-        if frag_safe not in safe:
-            continue
-        tip = html.escape(iss.message)
-        if iss.level == Level.ERROR:
-            repl = f'<mark title="{tip}" style="background:#f8cbad">{frag_safe}</mark>'
-        elif iss.level == Level.WARNING:
-            repl = f'<mark title="{tip}" style="background:#ffe699">{frag_safe}</mark>'
-        else:
-            repl = (f'<span title="{tip}" style="text-decoration:underline '
-                    f'wavy #2b78c4">{frag_safe}</span>')
-        safe = safe.replace(frag_safe, repl, 1)
-    return (f'<div style="white-space:pre-wrap;border:1px solid #ddd;'
-            f'padding:10px;border-radius:6px;max-height:340px;overflow:auto">'
-            f'{safe}</div>')
-
-
-def _spell_issues(data: C.AppData, post: PostRecord) -> list[Issue]:
-    if not (post.text or "").strip():
-        return []
-    placeholder = st.empty()
-    placeholder.caption("проверяем орфографию…")
-    status, words = C.spell_for_post(post, data.cfg)
-    placeholder.empty()
-    if status == "unavailable":
-        st.caption("Орфографию проверить не удалось, нет связи с сервисом.")
-        return []
-    out = []
-    for w in words:
-        variants = ", ".join(w["variants"]) or "нет вариантов"
-        out.append(Issue(post.sheet, post.row, "Пост", Level.WARNING,
-                         "spell_error",
-                         f"Возможная опечатка: «{w['word']}». Варианты: {variants}.",
-                         "Проверьте слово или добавьте его в словарь.",
-                         brand=post.brand, extra={"word": w["word"]}))
-    return out
-
-
-def _issue_list(data: C.AppData, post: PostRecord, issues: list[Issue]) -> None:
-    if not issues:
-        st.success("Замечаний нет 🎉")
-        return
-    order = {Level.ERROR: 0, Level.WARNING: 1, Level.ADVICE: 2, Level.TECH: 3}
-    ordered = sorted(issues, key=lambda i: order.get(i.level, 9))
-
-    show_key = f"show_all_{post.sheet}_{post.row}"
-    limit = 5
-    show_all = st.session_state.get(show_key, False)
-    visible = ordered if show_all else ordered[:limit]
-
-    for n, iss in enumerate(visible):
-        with st.container(border=True):
-            cols = st.columns([8, 2], vertical_alignment="center")
-            with cols[0]:
-                st.markdown(f"{iss.level.emoji} {iss.message}")
-                if iss.fix:
-                    st.caption(iss.fix)
-            with cols[1]:
-                if iss.code == "spell_error":
-                    if st.button("Добавить слово",
-                                 key=f"wl_{post.row}_{n}_{iss.code}",
-                                 type="tertiary", use_container_width=True,
-                                 help="Добавить в словарь орфографии"):
-                        config_mod.add_word_to_whitelist(iss.extra.get("word", ""))
-                        C.persist_all()
-                        st.rerun()
-                else:
-                    if st.button("Не ошибка",
-                                 key=f"ig_{post.row}_{n}_{iss.code}",
-                                 type="tertiary", use_container_width=True,
-                                 help="Скрыть это замечание"):
-                        chash = config_mod.content_hash(post.text)
-                        config_mod.add_ignored(iss.sheet, iss.code, chash,
-                                               row=post.row)
-                        C.persist_all()
-                        st.rerun()
-
-    hidden = len(ordered) - len(visible)
-    if hidden > 0:
-        if st.button(f"Показать ещё {hidden}",
-                     key=f"more_{post.sheet}_{post.row}"):
-            st.session_state[show_key] = True
-            st.rerun()
-
-
 _PHOTO_TAG_RE = re.compile(r"^(ЛОГО|БЕЗ ЛОГО|ЯБ|СОЦ)\s*:\s*", re.IGNORECASE)
 
 
 def _photo_parts(ph: str, i: int) -> tuple[str, str, str]:
-    """(подпись превью, подпись кнопки, прямая ссылка)."""
     m = _PHOTO_TAG_RE.match(ph)
     tag = m.group(1).upper() if m else ""
     direct = _PHOTO_TAG_RE.sub("", ph).strip()
@@ -427,46 +551,145 @@ def _photos(post: PostRecord) -> None:
                 elif direct.lower().startswith("http"):
                     st.link_button(button, direct, use_container_width=True)
                 else:
-                    st.caption("🖼 " + (direct or caption)[:40])
+                    st.caption((direct or caption)[:40])
 
 
 # ---------------------------------------------------------------------------
-# Вкладка «Все замечания»
+# Посты без даты
 # ---------------------------------------------------------------------------
-def _tab_all_issues(data: C.AppData, filtered) -> None:
-    # замечания по отфильтрованным постам + реестр за месяц
-    rows = []
-    period = C.current_period()
-    seen_post_keys = {(p.sheet, p.row) for p, _ in filtered}
-
-    collected: list[Issue] = []
-    for _, iss in filtered:
-        collected.extend(iss)
-    for i in data.issues:
-        if i.sheet == loader_mod.REGISTRY_SHEET and \
-           C.period_matches(C.issue_date(i, data), period):
-            collected.append(i)
-
-    for i in collected:
-        d = C.issue_date(i, data)
-        rows.append({
-            "Уровень": f"{i.level.emoji} {i.level.title_ru}",
-            "Дата поста": C.fmt_date_short(d) if d else "",
-            "Бренд": i.brand,
-            "Где": f"{i.sheet}, строка {i.row}",
-            "Открыть": C.sheet_link(i.row, i.sheet) or "",
-            "Суть": i.message,
-            "Как исправить": i.fix,
-        })
-    if not rows:
-        st.info("Замечаний по выбранным фильтрам нет.")
+def _no_date_block(data: C.AppData) -> None:
+    brand_sel = st.session_state.get("flt_brand") or "Все"
+    no_date = [p for p in data.posts if not p.date
+               and (brand_sel == "Все" or p.brand == brand_sel)]
+    if not no_date:
         return
-    df = pd.DataFrame(rows)
-    st.dataframe(df, use_container_width=True, hide_index=True, height=560,
-                 column_config={
-                     "Открыть": st.column_config.LinkColumn(
-                         "Открыть", display_text="в таблице"),
-                     "Суть": st.column_config.TextColumn(width="large"),
-                     "Как исправить": st.column_config.TextColumn(width="large"),
-                 })
-    st.caption(f"Всего замечаний: {len(rows)}")
+    st.divider()
+    st.markdown(f"##### Посты без даты · {C.plural_posts(len(no_date))}")
+    st.caption("У этих постов не заполнена дата — они не попадают ни в один "
+               "месяц. Проставьте дату в таблице.")
+    rules = data.cfg["rules"]
+    rows = [{"Лист": p.sheet, "Строка": p.row, "Бренд": p.brand,
+             "Рубрика": C.norm_type(p.post_type, rules),
+             "Начало текста": _text_preview(p, 90)} for p in no_date]
+    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True,
+                 height=min(360, 60 + 35 * len(rows)),
+                 column_config={"Начало текста":
+                                st.column_config.TextColumn(width="large")})
+
+
+# ---------------------------------------------------------------------------
+# Вкладка «Замечания» (по типам)
+# ---------------------------------------------------------------------------
+def _view_issues(data: C.AppData, base, period) -> None:
+    brand_codes = list(data.cfg["brands"].keys())
+    st.pills("Бренд", ["Все"] + brand_codes, selection_mode="single",
+             key="flt_brand", label_visibility="collapsed")
+
+    # сгруппировать структурные замечания по коду и уровню
+    by_key = dict(((p.sheet, p.row), (p, iss)) for p, iss in base)
+    groups: dict[Level, dict[str, list[tuple]]] = {l: {} for l in _LEVELS}
+    for p, iss in base:
+        for i in iss:
+            if i.level not in groups:
+                continue
+            groups[i.level].setdefault(i.code, []).append((p, i))
+
+    # выбранное правило: идентификатор = «уровень|код» (один код бывает на
+    # разных уровнях, напр. хештег обязателен в «Отгрузке» и желателен иначе)
+    all_ids = [f"{lvl.value}|{code}" for lvl in _LEVELS for code in groups[lvl]]
+    sel_rule = st.session_state.get("sel_rule")
+    if sel_rule not in all_ids:
+        sel_rule = all_ids[0] if all_ids else None
+        st.session_state["sel_rule"] = sel_rule
+
+    total_issues = sum(len(v) for lvl in _LEVELS for v in groups[lvl].values())
+    posts_with = len({k for k, (_, iss) in by_key.items() if iss})
+    st.caption(f"{total_issues} замечаний в {posts_with} постах из {len(base)}")
+
+    if not all_ids:
+        st.success("Замечаний по выбранным условиям нет")
+        return
+
+    left, right = st.columns([1.1, 2], gap="medium")
+    with left:
+        for lvl in _LEVELS:
+            rules_map = groups[lvl]
+            if not rules_map:
+                continue
+            d = _LVL[lvl]
+            total = sum(len(v) for v in rules_map.values())
+            st.markdown(f'{_square(d["dot"])}<b>{d["plural"]} · {total}</b>',
+                        unsafe_allow_html=True)
+            ordered = sorted(rules_map.items(), key=lambda kv: -len(kv[1]))
+            for code, items in ordered:
+                rid = f"{lvl.value}|{code}"
+                n_posts = len({(p.sheet, p.row) for p, _ in items})
+                active = rid == sel_rule
+                if st.button(f"{_rule_name(code, items[0][1].message)} · {n_posts}",
+                             key=f"rule_{rid}", use_container_width=True,
+                             type="primary" if active else "secondary"):
+                    st.session_state["sel_rule"] = rid
+                    st.rerun()
+            st.write("")
+
+    with right:
+        _rule_detail(data, groups, sel_rule)
+
+
+def _rule_detail(data: C.AppData, groups, rule_id: str) -> None:
+    level_val, _, code = rule_id.partition("|")
+    level = Level(level_val)
+    items = groups[level][code]
+    verified = st.session_state["verified"]
+
+    # уникальные посты
+    seen, posts = set(), []
+    for p, i in items:
+        key = (p.sheet, p.row)
+        if key not in seen:
+            seen.add(key)
+            posts.append((p, i))
+    total = len(posts)
+    done = sum(1 for p, _ in posts if (p.sheet, p.row) in verified)
+
+    with st.container(border=True):
+        st.markdown(f'{_tag(level)}&nbsp; '
+                    f'<b style="font-size:18px">{html.escape(_rule_name(code))}</b>',
+                    unsafe_allow_html=True)
+        hint = items[0][1].fix or ""
+        st.markdown(f'<span style="color:#464646">{html.escape(hint)}</span> '
+                    'Отметьте пост, когда исправите его в таблице — отметка '
+                    'сохранится до обновления данных.', unsafe_allow_html=True)
+        st.progress(done / total if total else 0.0,
+                    text=f"Исправлено {done} из {total}")
+
+        st.write("")
+        for p, i in posts:
+            key = (p.sheet, p.row)
+            row = st.columns([1, 3, 2, 8, 3], vertical_alignment="center")
+            checked = row[0].checkbox(
+                "исправлено", value=key in verified,
+                key=f"chk_{level_val}_{code}_{p.sheet}_{p.row}",
+                label_visibility="collapsed")
+            if checked:
+                verified.add(key)
+            else:
+                verified.discard(key)
+            muted = "color:#858585;" if key in verified else ""
+            strike = "text-decoration:line-through;" if key in verified else ""
+            row[1].markdown(f'<span style="{muted}">'
+                            f'{C.fmt_date_compact(p.date) or "—"}</span>',
+                            unsafe_allow_html=True)
+            row[2].markdown(f'<span style="font-weight:600;{muted}">{p.brand}'
+                            f'</span>', unsafe_allow_html=True)
+            row[3].markdown(
+                f'<span style="{muted}{strike}white-space:nowrap;overflow:hidden;'
+                f'text-overflow:ellipsis;display:block">'
+                f'{html.escape(_text_preview(p, 80))}</span>',
+                unsafe_allow_html=True)
+            if row[4].button("Открыть",
+                             key=f"open_{level_val}_{code}_{p.sheet}_{p.row}",
+                             type="tertiary"):
+                st.session_state["sel_post"] = key
+                st.session_state["force_view"] = "Посты"
+                st.rerun()
