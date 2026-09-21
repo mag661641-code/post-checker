@@ -136,9 +136,6 @@ button, input, textarea, select {
 /* Ссылки */
 a, a:visited { color:#1D42A5; }
 a:hover { color:#2A53BB; }
-
-/* Меньше пустого места сверху основного контейнера */
-.block-container { padding-top: 2rem; }
 </style>
 """
 
