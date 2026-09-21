@@ -714,8 +714,8 @@ def _ai_settings() -> None:
                    "секреты (Manage app → Settings → Secrets), чтобы включить "
                    "проверку нейросетью. Без ключа сервис работает как раньше.")
 
-    models = ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.5-pro"]
-    cur_model = ai.get("model", "gemini-2.5-flash")
+    models = ["gemini-3.6-flash", "gemini-3.6-flash-lite", "gemini-flash-latest"]
+    cur_model = ai.get("model", "gemini-3.6-flash")
     if cur_model not in models:
         models.append(cur_model)
     model = st.selectbox("Модель", models, index=models.index(cur_model),

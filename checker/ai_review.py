@@ -16,7 +16,7 @@ from typing import Any, Optional
 
 # значения по умолчанию для раздела rules["ai"]
 DEFAULT_AI: dict[str, Any] = {
-    "model": "gemini-2.5-flash",
+    "model": "gemini-3.6-flash",
     "check_tone": True,
     "check_structure": True,
     "check_quality": True,
