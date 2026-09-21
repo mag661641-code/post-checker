@@ -47,6 +47,22 @@ _LVL = {
 _LEVELS = [Level.ERROR, Level.WARNING, Level.ADVICE]
 _SEV_LEVEL = {"err": Level.ERROR, "warn": Level.WARNING, "tip": Level.ADVICE}
 
+# короткие названия типов постов для тесных мест (ячейки календаря)
+_TYPE_SHORT = {
+    "Отгрузка": "Отгрузка", "Спецпредложение": "Спецпредл.",
+    "Поступление": "Поступл.", "Информационный": "Информ.",
+    "Праздник": "Праздник", "Поздравление": "Поздравл.",
+    "Поздравление (сотрудники)": "Поздр.(сотр.)",
+    "Развлекательный": "Развлек.", "Дзен": "Дзен", "Анонс": "Анонс",
+}
+
+
+def _short_type(name: str) -> str:
+    n = (name or "").strip()
+    if n in _TYPE_SHORT:
+        return _TYPE_SHORT[n]
+    return (n[:9] + ".") if len(n) > 10 else n
+
 _POSTS_CSS = """
 <style>
 /* KPI-карточки-фильтры */
@@ -664,12 +680,13 @@ def _cal_cell(col, dnum: int, items, rules, selected: bool) -> None:
     for p, iss in items[:3]:
         s = _post_sev(iss)
         dot = _square(_LVL[s]["dot"] if s else "#858585", 8)
-        ptype = html.escape(C.norm_type(p.post_type, rules))
-        chips += (f'<div style="display:flex;align-items:flex-start;gap:4px;'
+        ptype = html.escape(_short_type(C.norm_type(p.post_type, rules)))
+        chips += (f'<div style="display:flex;align-items:center;gap:4px;'
                   f'padding:2px 5px;border:1px solid #DFDFDF;border-radius:4px;'
-                  f'font-size:11px;line-height:15px;margin-bottom:3px;'
-                  f'text-align:left">{dot}<span><b>{html.escape(p.brand)}</b> '
-                  f'{ptype}</span></div>')
+                  f'font-size:11px;line-height:16px;margin-bottom:3px;'
+                  f'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;'
+                  f'text-align:left">{dot}<b>{html.escape(p.brand)}</b> '
+                  f'{ptype}</div>')
     extra = len(items) - 3
     if extra > 0:
         chips += f'<div style="font-size:11px;color:#464646">+{extra}</div>'
