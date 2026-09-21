@@ -191,6 +191,9 @@ def _friendly_error(exc: Exception) -> str:
         return "Неверный ключ Google AI или нет доступа."
     if "quota" in s or "resource_exhausted" in s or "rate" in s or "429" in s:
         return "Превышен лимит запросов к Google AI. Попробуйте позже."
+    if "not found" in s or "not supported" in s or "404" in s:
+        return ("Выбранная модель недоступна для этого ключа. Выберите другую "
+                "модель в настройках (например, gemini-2.5-flash-lite).")
     if "deadline" in s or "timeout" in s or "timed out" in s:
         return "Google AI не ответил вовремя. Попробуйте ещё раз."
     if "connection" in s or "network" in s or "unavailable" in s or \
@@ -269,4 +272,9 @@ def test_connection(api_key: str, model: str) -> tuple[bool, str]:
         txt = (getattr(resp, "text", "") or "").strip()
         return True, f"Связь с Google AI есть. Ответ: «{txt[:40]}»."
     except Exception as exc:  # noqa: BLE001
-        return False, _friendly_error(exc)
+        # для кнопки диагностики показываем и техническую деталь ошибки
+        msg = _friendly_error(exc)
+        detail = " ".join(str(exc).split())[:300]
+        if detail and detail.lower() not in msg.lower():
+            msg += f" Детали: {detail}"
+        return False, msg
