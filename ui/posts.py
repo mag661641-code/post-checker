@@ -423,6 +423,9 @@ def _post_card(data: C.AppData, by_key: dict, sel_key: tuple) -> None:
         # фото
         _photos(post)
 
+        # смысловая проверка нейросетью
+        _ai_section(data, post, sel_key)
+
         # кнопки
         st.write("")
         cols = st.columns(2)
@@ -476,6 +479,89 @@ def _issue_block(post: PostRecord, iss: Issue, n: int) -> None:
                 chash = config_mod.content_hash(post.text)
                 config_mod.add_ignored(iss.sheet, iss.code, chash, row=post.row)
                 C.persist_all()
+                st.rerun()
+
+
+# ---------------------------------------------------------------------------
+# Смысловая проверка нейросетью (🤖)
+# ---------------------------------------------------------------------------
+def _ai_section(data: C.AppData, post: PostRecord, key: tuple) -> None:
+    st.divider()
+    row = st.columns([6, 3], vertical_alignment="center")
+    row[0].markdown("**Замечания нейросети** 🤖")
+    api_key = C.get_ai_key()
+    store = st.session_state.setdefault("ai_res", {})
+    chash = config_mod.content_hash(post.text)
+    btn_key = f"ai_btn_{post.sheet}_{post.row}"
+
+    if not api_key:
+        row[1].button("🤖 Проверить нейросетью", key=btn_key, disabled=True,
+                      use_container_width=True)
+        st.caption("Чтобы включить проверку нейросетью, добавьте ключ Google AI.")
+        return
+
+    if row[1].button("🤖 Проверить нейросетью", key=btn_key,
+                     use_container_width=True):
+        with st.spinner("Проверяем нейросетью…"):
+            res = C.ai_review_post(data, post)
+        store[key] = {"hash": chash, "res": res}
+        if res.get("ok"):
+            st.session_state["ai_checked_count"] = \
+                st.session_state.get("ai_checked_count", 0) + 1
+        st.rerun()
+
+    entry = store.get(key)
+    if not entry:
+        st.caption("Нажмите «Проверить нейросетью» — получите советы по тону, "
+                   "структуре и качеству текста. Это платный запрос к Google AI.")
+        return
+    if entry["hash"] != chash:
+        st.caption("⚠️ Текст изменился после проверки — проверьте заново.")
+    res = entry["res"]
+    if not res.get("ok"):
+        st.caption("Проверка нейросетью не выполнена: " + res.get("error", ""))
+        return
+    ai_issues = res.get("issues", [])
+    if not ai_issues:
+        st.caption("Нейросеть замечаний не нашла.")
+        return
+    for n, item in enumerate(ai_issues):
+        _ai_issue_block(post, item, n, key)
+    st.caption("Это советы нейросети, они могут быть неточными. Факты, цифры "
+               "и сроки проверяйте с отделом продаж.")
+
+
+def _ai_issue_block(post: PostRecord, item: dict, n: int, key: tuple) -> None:
+    lvl = Level.WARNING if item.get("level") == "warning" else Level.ADVICE
+    with st.container(border=True):
+        cols = st.columns([9, 1], vertical_alignment="center")
+        with cols[0]:
+            st.markdown(f'🤖 {_tag(lvl)}&nbsp; '
+                        f'<b>{html.escape(item.get("title", ""))}</b>',
+                        unsafe_allow_html=True)
+            if item.get("why"):
+                st.markdown(f'<span style="color:#464646;font-size:14px">'
+                            f'Почему важно: {html.escape(item["why"])}</span>',
+                            unsafe_allow_html=True)
+            if item.get("what_to_do"):
+                st.markdown(f'<span style="color:#464646;font-size:13px">'
+                            f'Что сделать: {html.escape(item["what_to_do"])}'
+                            f'</span>', unsafe_allow_html=True)
+            q = item.get("quote", "")
+            if q and q in (post.text or ""):
+                st.markdown(f'<span style="font-size:14px">Фрагмент: '
+                            f'<mark style="background:#FFE26C;color:#1E1E1E;'
+                            f'padding:0 3px;border-radius:2px">{html.escape(q)}'
+                            f'</mark></span>', unsafe_allow_html=True)
+        with cols[1]:
+            if st.button("Не ошибка", key=f"ai_ig_{post.sheet}_{post.row}_{n}",
+                         type="tertiary", help="Скрыть это замечание"):
+                entry = st.session_state.get("ai_res", {}).get(key)
+                if entry and entry["res"].get("issues"):
+                    try:
+                        entry["res"]["issues"].pop(n)
+                    except IndexError:
+                        pass
                 st.rerun()
 
 

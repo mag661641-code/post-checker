@@ -732,6 +732,48 @@ def spell_for_post(post: PostRecord, cfg: dict) -> tuple[str, list[dict]]:
 
 
 # ---------------------------------------------------------------------------
+# Смысловая проверка нейросетью (Google Gemini)
+# ---------------------------------------------------------------------------
+def get_ai_key() -> Optional[str]:
+    """Ключ Google AI из секретов Streamlit (или None)."""
+    try:
+        return st.secrets.get("google_ai_api_key") or None  # type: ignore
+    except Exception:  # noqa: BLE001
+        return None
+
+
+@st.cache_data(show_spinner=False)
+def _cached_ai_review(text: str, brand: str, post_type: str, date: str,
+                      tone: str, avoid: str, structure: str,
+                      settings_sig: str, api_key: str) -> dict:
+    import json as _json
+    from checker import ai_review
+    settings = _json.loads(settings_sig)
+    return ai_review.review(text, brand, post_type, date, tone, avoid,
+                            structure, settings, api_key)
+
+
+def ai_review_post(data: "AppData", post: PostRecord) -> dict:
+    """Проверить пост нейросетью (с кешем по тексту). Возвращает
+    {"ok": True, "issues": [...]} или {"ok": False, "error": "…"}."""
+    import json as _json
+    from checker import ai_review
+    api_key = get_ai_key()
+    if not api_key:
+        return {"ok": False, "error": "Ключ Google AI не задан."}
+    cfg = data.cfg
+    settings = ai_review.ai_settings(cfg["rules"])
+    brand = cfg["brands"].get(post.brand, {})
+    structure = (cfg["rules"].get("post_type_structure", {})
+                 .get(norm_type(post.post_type, cfg["rules"]), ""))
+    return _cached_ai_review(
+        post.text or "", post.brand, post.post_type,
+        fmt_date_short(post.date) if post.date else "",
+        brand.get("tone", ""), brand.get("avoid", ""), structure,
+        _json.dumps(settings, ensure_ascii=False, sort_keys=True), api_key)
+
+
+# ---------------------------------------------------------------------------
 # Источник данных: Google-таблица (авто) + Excel (запасной)
 # ---------------------------------------------------------------------------
 def get_service_account():

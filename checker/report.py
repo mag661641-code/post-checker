@@ -24,14 +24,19 @@ _HEADER_FILL = PatternFill("solid", fgColor="4472C4")
 _HEADER_FONT = Font(color="FFFFFF", bold=True)
 
 _COLUMNS = ["Уровень", "Лист", "Строка", "Колонка", "Бренд", "Тип поста",
-            "Статус", "Суть замечания", "Как исправить", "Код", "Ссылка"]
+            "Статус", "Суть замечания", "Как исправить", "Код",
+            "Источник замечания", "Ссылка"]
+
+
+def _issue_source(iss: Issue) -> str:
+    return "Нейросеть" if str(iss.code).startswith("ai_") else "Правило"
 
 
 def _issue_row(iss: Issue) -> list[Any]:
     return [
         f"{iss.level.emoji} {iss.level.title_ru}",
         iss.sheet, iss.row, iss.column, iss.brand, iss.post_type,
-        iss.status, iss.message, iss.fix, iss.code, iss.link,
+        iss.status, iss.message, iss.fix, iss.code, _issue_source(iss), iss.link,
     ]
 
 
@@ -48,7 +53,7 @@ def _write_sheet(ws, issues: list[Issue]) -> None:
         if fill:
             for c in range(1, len(_COLUMNS) + 1):
                 ws.cell(ws.max_row, c).fill = fill
-    widths = [18, 16, 8, 16, 8, 16, 12, 55, 55, 20, 40]
+    widths = [18, 16, 8, 16, 8, 16, 12, 55, 55, 20, 16, 40]
     for i, w in enumerate(widths, start=1):
         ws.column_dimensions[get_column_letter(i)].width = w
     ws.freeze_panes = "A2"

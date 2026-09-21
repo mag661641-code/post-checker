@@ -17,7 +17,8 @@ def render() -> None:
     (st.success if persistent else st.warning)(status)
 
     tabs = st.tabs(["🔗 Источник данных", "🏷 Бренды", "✅ Проверки",
-                    "📚 Словари", "🙈 Скрытые замечания", "💾 Резервная копия"])
+                    "📚 Словари", "🤖 Нейросеть", "🙈 Скрытые замечания",
+                    "💾 Резервная копия"])
     with tabs[0]:
         _source()
     with tabs[1]:
@@ -27,8 +28,10 @@ def render() -> None:
     with tabs[3]:
         _dictionaries()
     with tabs[4]:
-        _ignored()
+        _ai_settings()
     with tabs[5]:
+        _ignored()
+    with tabs[6]:
         _backup()
 
 
@@ -273,6 +276,19 @@ def _brands() -> None:
         if ship:
             st.caption("Дополнительно в отгрузках: " + " ".join(ship))
 
+    # --- Как пишем (для смысловой проверки нейросетью) ---
+    with st.container(border=True):
+        st.markdown("**Как пишем (для проверки нейросетью)**")
+        st.caption("Если оставить пустым — проверка тона для этого бренда "
+                   "не выполняется.")
+        tone = st.text_area(
+            "Тон бренда", value=b.get("tone", ""), key=f"tone_{code}", height=110,
+            placeholder="Сдержанно и по делу, основное внимание характеристикам. "
+                        "Обращение на «вы». Без восклицаний и рекламных штампов.")
+        avoid = st.text_area(
+            "Чего избегать", value=b.get("avoid", ""), key=f"avoid_{code}",
+            height=70, placeholder="восклицания, рекламные штампы, «супер», «лучший»")
+
     # --- Правила проверки по типам (переопределение для бренда) ---
     all_rules = config_mod.load_rules()
     ptr = all_rules.get("post_type_rules", {})
@@ -396,6 +412,8 @@ def _brands() -> None:
             "email": email.strip(),
             "phone": phone.strip(),
             "enabled": enabled,
+            "tone": tone.strip(),
+            "avoid": avoid.strip(),
             "required_hashtags_general": general,
             "required_hashtags_shipment": ship,
             "first_hashtag_must_be": None if first == "Не важно" else first,
@@ -582,6 +600,7 @@ def _dictionaries() -> None:
 def _dict_types(rules: dict) -> None:
     types = rules.get("post_type_canonical", {})
     ptr = rules.get("post_type_rules", {})
+    structure = rules.get("post_type_structure", {})
     new_vals = {}
     for canon, variants in types.items():
         with st.container(border=True):
@@ -601,7 +620,13 @@ def _dict_types(rules: dict) -> None:
                                    key=f"te_{canon}")
             hashtags = cc[3].checkbox("Хэштеги", value=bool(cur.get("hashtags", False)),
                                       key=f"tht_{canon}")
-            new_vals[canon] = (v, phone, site, email, hashtags)
+            struct = st.text_area(
+                "Из чего состоит такой пост (для проверки нейросетью)",
+                value=structure.get(canon, ""), key=f"struct_{canon}", height=80,
+                placeholder="заголовок со ссылкой на каталог, подводка, список "
+                            "характеристик с назначением, блок преимуществ, "
+                            "призыв к действию, контакты, хэштеги")
+            new_vals[canon] = (v, phone, site, email, hashtags, struct)
 
     st.caption("Галочки — общие значения по умолчанию для всех брендов. "
                "Отличия конкретного бренда задаются в «Бренды» → «Правила "
@@ -610,7 +635,9 @@ def _dict_types(rules: dict) -> None:
         rules["post_type_canonical"] = {c: v for c, (v, *_r) in new_vals.items()}
         rules["post_type_rules"] = {
             c: {"phone": p, "site": s, "email": e, "hashtags": h}
-            for c, (_v, p, s, e, h) in new_vals.items()}
+            for c, (_v, p, s, e, h, _st) in new_vals.items()}
+        rules["post_type_structure"] = {
+            c: st_.strip() for c, (*_r, st_) in new_vals.items() if st_.strip()}
         config_mod.save_rules(rules)
         _clear_caches()
         st.toast("Настройки сохранены")
@@ -669,6 +696,72 @@ def _dict_spelling() -> None:
         _clear_caches()
         st.toast(f"Сохранено. Добавлено новых слов: {max(0, added)}")
         st.rerun()
+
+
+# ===========================================================================
+# ВКЛАДКА «🤖 НЕЙРОСЕТЬ»
+# ===========================================================================
+def _ai_settings() -> None:
+    from checker import ai_review
+    rules = config_mod.load_rules()
+    ai = ai_review.ai_settings(rules)
+    key = C.get_ai_key()
+
+    if key:
+        st.success("Ключ Google AI добавлен.")
+    else:
+        st.warning("Ключ Google AI не добавлен. Добавьте `google_ai_api_key` в "
+                   "секреты (Manage app → Settings → Secrets), чтобы включить "
+                   "проверку нейросетью. Без ключа сервис работает как раньше.")
+
+    models = ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.5-pro"]
+    cur_model = ai.get("model", "gemini-2.5-flash")
+    if cur_model not in models:
+        models.append(cur_model)
+    model = st.selectbox("Модель", models, index=models.index(cur_model),
+                         key="ai_model")
+
+    c = st.columns(3)
+    t_tone = c[0].toggle("Проверять тон бренда", value=ai.get("check_tone", True),
+                         key="ai_tone")
+    t_str = c[1].toggle("Проверять структуру",
+                        value=ai.get("check_structure", True), key="ai_struct")
+    t_q = c[2].toggle("Проверять качество текста",
+                      value=ai.get("check_quality", True), key="ai_quality")
+
+    c2 = st.columns(3)
+    labels = {"advice": "🔵 Совет", "warning": "🟡 Предупреждение"}
+    cur_lvl = ai.get("level", "advice")
+    lvl = c2[0].selectbox("Уровень по умолчанию", list(labels.values()),
+                          index=0 if cur_lvl == "advice" else 1, key="ai_level")
+    lvl_val = "advice" if lvl.startswith("🔵") else "warning"
+    max_issues = c2[1].number_input("Макс. замечаний на пост", 1, 15,
+                                    int(ai.get("max_issues", 5)), key="ai_max")
+    pause = c2[2].number_input("Пауза между запросами, сек", 0.0, 10.0,
+                               float(ai.get("pause_seconds", 1.0)), step=0.5,
+                               key="ai_pause")
+
+    b = st.columns([1, 1, 3])
+    if b[0].button("💾 Сохранить", type="primary", key="ai_save"):
+        rules.setdefault("ai", {}).update({
+            "model": model, "check_tone": bool(t_tone),
+            "check_structure": bool(t_str), "check_quality": bool(t_q),
+            "level": lvl_val, "max_issues": int(max_issues),
+            "pause_seconds": float(pause)})
+        config_mod.save_rules(rules)
+        _clear_caches()
+        st.toast("Настройки сохранены")
+        st.rerun()
+    if b[1].button("Проверить связь с Google AI", key="ai_test",
+                   disabled=not key):
+        with st.spinner("Проверяем…"):
+            ok, msg = ai_review.test_connection(key, model)
+        (st.success if ok else st.error)(msg)
+
+    n = st.session_state.get("ai_checked_count", 0)
+    st.caption(f"Проверено постов нейросетью за эту сессию: {n}")
+    st.caption("Замечания нейросети — советующие и могут быть неточными. "
+               "Факты, цифры и сроки проверяйте с отделом продаж.")
 
 
 # ===========================================================================
