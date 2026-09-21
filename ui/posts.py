@@ -664,11 +664,12 @@ def _cal_cell(col, dnum: int, items, rules, selected: bool) -> None:
     for p, iss in items[:3]:
         s = _post_sev(iss)
         dot = _square(_LVL[s]["dot"] if s else "#858585", 8)
-        chips += (f'<div style="display:flex;align-items:center;gap:4px;height:20px;'
-                  f'padding:0 4px;border:1px solid #DFDFDF;border-radius:4px;'
-                  f'font-size:11px;white-space:nowrap;overflow:hidden;'
-                  f'margin-bottom:3px">{dot}<b>{html.escape(p.brand)}</b>&nbsp;'
-                  f'{html.escape(C.norm_type(p.post_type, rules)[:8])}</div>')
+        ptype = html.escape(C.norm_type(p.post_type, rules))
+        chips += (f'<div style="display:flex;align-items:flex-start;gap:4px;'
+                  f'padding:2px 5px;border:1px solid #DFDFDF;border-radius:4px;'
+                  f'font-size:11px;line-height:15px;margin-bottom:3px;'
+                  f'text-align:left">{dot}<span><b>{html.escape(p.brand)}</b> '
+                  f'{ptype}</span></div>')
     extra = len(items) - 3
     if extra > 0:
         chips += f'<div style="font-size:11px;color:#464646">+{extra}</div>'
