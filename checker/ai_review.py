@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from typing import Any, Optional
 
 # значения по умолчанию для раздела rules["ai"]
@@ -189,6 +190,9 @@ def _friendly_error(exc: Exception) -> str:
     if "api_key" in s or "api key" in s or "invalid" in s or "unauthenticated" \
             in s or "permission" in s or "401" in s or "403" in s:
         return "Неверный ключ Google AI или нет доступа."
+    if "503" in s or "high demand" in s or "overloaded" in s or \
+            "try again later" in s:
+        return "Google AI сейчас перегружен, попробуйте через минуту."
     if "quota" in s or "resource_exhausted" in s or "rate" in s or "429" in s:
         return "Превышен лимит запросов к Google AI. Попробуйте позже."
     if "not found" in s or "not supported" in s or "404" in s:
@@ -200,6 +204,29 @@ def _friendly_error(exc: Exception) -> str:
             "getaddrinfo" in s or "ssl" in s:
         return "Нет связи с Google AI (проверьте интернет/доступность сервиса)."
     return "Проверка нейросетью не выполнена. Попробуйте ещё раз."
+
+
+def _is_transient(exc: Exception) -> bool:
+    s = str(exc).lower()
+    return ("503" in s or "unavailable" in s or "high demand" in s
+            or "overloaded" in s or "429" in s or "resource_exhausted" in s)
+
+
+def _generate(client, model: str, contents, config=None,
+              retries: int = 2, pause: float = 1.0):
+    """Вызов модели с повтором при временных ошибках (503/лимит)."""
+    last: Optional[Exception] = None
+    for attempt in range(retries + 1):
+        try:
+            return client.models.generate_content(
+                model=model, contents=contents, config=config)
+        except Exception as exc:  # noqa: BLE001
+            last = exc
+            if _is_transient(exc) and attempt < retries:
+                time.sleep(pause * (attempt + 1))
+                continue
+            raise
+    raise last  # pragma: no cover
 
 
 def review(text: str, brand: str, post_type: str, date: str,
@@ -232,14 +259,14 @@ def review(text: str, brand: str, post_type: str, date: str,
                           cats, int(settings.get("max_issues", 5) or 5))
     try:
         client = genai.Client(api_key=api_key)
-        resp = client.models.generate_content(
-            model=settings.get("model") or DEFAULT_AI["model"],
-            contents=prompt,
+        resp = _generate(
+            client, settings.get("model") or DEFAULT_AI["model"], prompt,
             config=types.GenerateContentConfig(
                 response_mime_type="application/json",
                 response_schema=_schema(types),
                 temperature=0.2,
             ),
+            pause=float(settings.get("pause_seconds", 1.0) or 1.0),
         )
     except Exception as exc:  # noqa: BLE001
         return {"ok": False, "error": _friendly_error(exc)}
@@ -267,8 +294,8 @@ def test_connection(api_key: str, model: str) -> tuple[bool, str]:
         return False, "Пакет google-genai не установлен на сервере."
     try:
         client = genai.Client(api_key=api_key)
-        resp = client.models.generate_content(
-            model=model or DEFAULT_AI["model"], contents="Ответь одним словом: ок")
+        resp = _generate(client, model or DEFAULT_AI["model"],
+                         "Ответь одним словом: ок")
         txt = (getattr(resp, "text", "") or "").strip()
         return True, f"Связь с Google AI есть. Ответ: «{txt[:40]}»."
     except Exception as exc:  # noqa: BLE001
