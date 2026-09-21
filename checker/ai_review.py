@@ -53,9 +53,11 @@ def build_prompt(brand: str, post_type: str, date: str, text: str,
                  cats: list[str], max_issues: int) -> str:
     parts = [
         "Ты — редактор постов металлоторговой компании. Ты ПРОВЕРЯЕШЬ текст "
-        "поста и даёшь замечания. Ты НИКОГДА не переписываешь текст целиком и "
-        "не выдаёшь новую редакцию поста. Ты не придумываешь и не меняешь факты: "
-        "числа, марки стали, ГОСТы, размеры, сроки, цены, телефоны, адреса сайтов.",
+        "поста и предлагаешь точечные правки формулировок. "
+        "Ты правишь ТОЛЬКО стиль и подачу (тон, гладкость, повторы, ясность), "
+        "и НИКОГДА не меняешь факты: числа, марки стали, ГОСТы, размеры, "
+        "количества, сроки, даты, цены, телефоны, адреса сайтов, названия. "
+        "Ты не переписываешь пост целиком и не сочиняешь новых фактов.",
         "",
         f"Бренд: {brand or '—'}",
         f"Тип поста: {post_type or '—'}",
@@ -81,20 +83,32 @@ def build_prompt(brand: str, post_type: str, date: str, text: str,
     parts += [
         "Проверь: " + "; ".join(checks) + ".",
         "",
-        "Жёсткие ограничения:",
-        "- не предлагай менять числа, марки стали, ГОСТы, размеры, сроки, цены, "
-        "контакты;",
-        "- про сомнительные числа и обещания пиши ВОПРОСОМ на проверку человеку "
-        "(ты не знаешь реального положения дел), а не как утверждение об ошибке;",
-        "- в what_to_do не давай переписанный текст; допустим один короткий "
-        "пример формулировки с пометкой «например», не длиннее одного предложения;",
-        f"- не более {max_issues} самых важных замечаний.",
+        "Как оформлять каждое замечание:",
+        "- fragment — точная дословная подстрока из текста поста (скопируй "
+        "буква в букву, вместе с знаками), к которой относится правка; если "
+        "замечание про весь пост, оставь fragment пустым;",
+        "- suggestions — 1–3 варианта, как ПЕРЕПИСАТЬ этот фрагмент лучше по "
+        "стилю. В вариантах сохраняй ВСЕ факты фрагмента без изменений (те же "
+        "числа, марки, ГОСТы, размеры, сроки, цены, контакты, ссылки). Не "
+        "добавляй новых цифр и фактов, которых нет во фрагменте;",
+        "- если у фрагмента возможны РАЗНЫЕ смыслы (например, действие делает "
+        "менеджер или сам клиент), дай по варианту на каждый смысл и заполни "
+        "поле when («Если …»); иначе when оставь пустым;",
         "",
-        "Ответ верни строго в JSON по схеме (issues — массив объектов с полями "
-        "category, level, title, why, what_to_do, quote). "
+        "Особые случаи (НЕ предлагай замену текста, suggestions оставь пустым "
+        "массивом [] ):",
+        "- category = fact — сомнительное или требующее проверки число/факт: "
+        "напиши это ВОПРОСОМ человеку в why, ты не знаешь реального положения "
+        "дел;",
+        "- category = promise — рискованное обещание (срок, гарантия): тоже "
+        "вопрос на проверку, без готовой замены.",
+        "",
+        f"Дай не более {max_issues} самых важных замечаний.",
+        "",
+        "Ответ верни строго в JSON по схеме. issues — массив объектов с полями "
+        "category, level, title, why, fragment, suggestions. "
         "category ∈ {tone, structure, quality, fact, promise}; "
-        "level ∈ {advice, warning}. quote — короткая дословная цитата из поста, "
-        "к которой относится замечание (или пустая строка).",
+        "level ∈ {advice, warning}. suggestions — массив объектов {when, text}.",
     ]
     return "\n".join(parts)
 
@@ -102,14 +116,18 @@ def build_prompt(brand: str, post_type: str, date: str, text: str,
 def _schema(genai_types):
     S = genai_types.Schema
     T = genai_types.Type
+    suggestion = S(type=T.OBJECT, properties={
+        "when": S(type=T.STRING),
+        "text": S(type=T.STRING),
+    }, required=["when", "text"])
     issue = S(type=T.OBJECT, properties={
         "category": S(type=T.STRING),
         "level": S(type=T.STRING),
         "title": S(type=T.STRING),
         "why": S(type=T.STRING),
-        "what_to_do": S(type=T.STRING),
-        "quote": S(type=T.STRING),
-    }, required=["category", "level", "title", "why", "what_to_do", "quote"])
+        "fragment": S(type=T.STRING),
+        "suggestions": S(type=T.ARRAY, items=suggestion),
+    }, required=["category", "level", "title", "why", "fragment", "suggestions"])
     return S(type=T.OBJECT, properties={"issues": S(type=T.ARRAY, items=issue)},
              required=["issues"])
 
@@ -121,24 +139,38 @@ def _numbers(s: str) -> set[str]:
     return {m.replace(",", ".") for m in _NUM_RE.findall(s or "")}
 
 
-def _first_sentence(s: str, limit: int = 300) -> str:
-    s = re.sub(r"\s+", " ", (s or "").strip())
-    if len(s) <= limit:
-        return s
-    m = re.search(r"[.!?]", s[:limit])
-    if m:
-        return s[:m.end()].strip()
-    return s[:limit].rstrip() + "…"
+def _clean_option(opt: Any, text_nums: set[str], frag_nums: set[str],
+                  fragment: str, limit: int = 400) -> Optional[dict]:
+    """Проверить один вариант замены. Отбрасываем варианты с НОВЫМИ числами
+    (которых нет в тексте/фрагменте) и пустые/совпадающие с оригиналом."""
+    if not isinstance(opt, dict):
+        return None
+    when = re.sub(r"\s+", " ", str(opt.get("when", "")).strip())
+    txt = re.sub(r"\s+", " ", str(opt.get("text", "")).strip())
+    if not txt or txt == re.sub(r"\s+", " ", fragment.strip()):
+        return None
+    if len(txt) > limit:
+        txt = txt[:limit].rstrip() + "…"
+    # анти-выдумка: в замене не должно быть чисел, которых нет в оригинале
+    if _numbers(txt) - (text_nums | frag_nums):
+        return None
+    return {"when": when, "text": txt}
 
 
 def validate_issues(raw_issues: list[dict], text: str,
                     settings: dict) -> list[dict]:
     """Отфильтровать и почистить замечания от нейросети.
 
+    Формат замечания на выходе:
+        category, level, title, why, fragment, options[{when, text}]
+
     - только включённые категории и корректные поля;
-    - выбрасываем замечания, где в title/why/what_to_do есть числа, которых нет
-      в тексте поста (числа внутри quote допускаются);
-    - what_to_do обрезаем до одного предложения / 300 символов;
+    - fragment должен быть дословной подстрокой текста, иначе он обнуляется;
+    - выбрасываем замечания, где в title/why есть числа, которых нет в тексте
+      (числа во фрагменте допускаются);
+    - варианты замены (options) только для стилевых категорий и при валидном
+      фрагменте; варианты с новыми числами отбрасываются;
+    - для fact/promise замен не предлагаем — только вопрос-предупреждение;
     - ограничиваем количество.
     """
     cats_on = set()
@@ -161,22 +193,31 @@ def validate_issues(raw_issues: list[dict], text: str,
             continue
         title = str(it.get("title", "")).strip()
         why = str(it.get("why", "")).strip()
-        what = _first_sentence(str(it.get("what_to_do", "")))
-        quote = str(it.get("quote", "")).strip()
         if not title:
             continue
-        # анти-выдумка: числа вне цитаты должны быть из текста поста
-        allowed = text_nums | _numbers(quote)
-        extra_nums = (_numbers(title) | _numbers(why) | _numbers(what)) - allowed
-        if extra_nums:
+        fragment = str(it.get("fragment", "")).strip()
+        if fragment and fragment not in (text or ""):
+            fragment = ""  # не смогли привязать к тексту — не подсвечиваем
+        frag_nums = _numbers(fragment)
+        # анти-выдумка: числа в заголовке/пояснении должны быть из текста
+        if (_numbers(title) | _numbers(why)) - (text_nums | frag_nums):
             continue
+        # варианты замены — только для стилевых категорий и при якоре
+        options: list[dict] = []
+        if cat not in _WARN_CATEGORIES and fragment:
+            for o in (it.get("suggestions") or it.get("options") or []):
+                cleaned = _clean_option(o, text_nums, frag_nums, fragment)
+                if cleaned:
+                    options.append(cleaned)
+                if len(options) >= 3:
+                    break
         level = str(it.get("level", "")).strip().lower()
         if cat in _WARN_CATEGORIES:
             level = "warning"
         elif level not in ("advice", "warning"):
             level = default_level
         out.append({"category": cat, "level": level, "title": title,
-                    "why": why, "what_to_do": what, "quote": quote})
+                    "why": why, "fragment": fragment, "options": options})
         if len(out) >= max_issues:
             break
     return out

@@ -160,6 +160,15 @@ def render() -> None:
                                   "search": search, "levels": [],
                                   "only_issues": False}, period)
 
+    # --- отдельный экран поста: проверка текста нейросетью ---
+    ai_key = st.session_state.get("ai_post")
+    if ai_key:
+        post = next((p for p in data.posts if (p.sheet, p.row) == ai_key), None)
+        if post is not None:
+            _ai_page(data, post, period)
+            return
+        st.session_state.pop("ai_post", None)
+
     # --- шапка ---
     _header(data, period, base)
 
@@ -423,8 +432,24 @@ def _post_card(data: C.AppData, by_key: dict, sel_key: tuple) -> None:
         # фото
         _photos(post)
 
-        # смысловая проверка нейросетью
-        _ai_section(data, post, sel_key)
+        # смысловая проверка нейросетью — на отдельном экране
+        st.divider()
+        st.markdown("**Замечания нейросети** 🤖")
+        if C.get_ai_key():
+            n_ai = _ai_pending_count(sel_key)
+            hint = f" · {n_ai} на рассмотрении" if n_ai else ""
+            if st.button(f"🤖 Проверить текст нейросетью{hint}",
+                         key=f"open_ai_{post.sheet}_{post.row}",
+                         use_container_width=True, type="secondary"):
+                st.session_state["ai_post"] = sel_key
+                st.rerun()
+            st.caption("Откроется отдельный экран: советы по тону и стилю с "
+                       "готовыми вариантами замены. Это платный запрос к Google AI.")
+        else:
+            st.button("🤖 Проверить текст нейросетью", disabled=True,
+                      key=f"open_ai_{post.sheet}_{post.row}",
+                      use_container_width=True)
+            st.caption("Добавьте ключ Google AI, чтобы включить проверку.")
 
         # кнопки
         st.write("")
@@ -483,25 +508,54 @@ def _issue_block(post: PostRecord, iss: Issue, n: int) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Смысловая проверка нейросетью (🤖)
+# Смысловая проверка нейросетью (🤖) — отдельный экран поста
 # ---------------------------------------------------------------------------
-def _ai_section(data: C.AppData, post: PostRecord, key: tuple) -> None:
-    st.divider()
-    st.markdown("**Замечания нейросети** 🤖")
-    api_key = C.get_ai_key()
+def _ai_decisions(key: tuple) -> dict:
+    """Решения по замечаниям поста: индекс замечания -> {status, text}."""
+    return st.session_state.setdefault("ai_dec", {}).setdefault(key, {})
+
+
+def _ai_pending_count(key: tuple) -> int:
+    entry = st.session_state.get("ai_res", {}).get(key)
+    if not entry or not entry["res"].get("ok"):
+        return 0
+    issues = entry["res"].get("issues", [])
+    dec = st.session_state.get("ai_dec", {}).get(key, {})
+    return sum(1 for i in range(len(issues))
+               if dec.get(i, {}).get("status") not in ("accepted", "rejected"))
+
+
+def _ai_page(data: C.AppData, post: PostRecord, period) -> None:
+    rules = data.cfg["rules"]
+    key = (post.sheet, post.row)
+    today = C.moscow_today()
+    year, month = period if isinstance(period, tuple) else (today.year, today.month)
+
+    if st.button(f"← Все посты · {C.MONTHS_NOM[month].lower()} {year}",
+                 key="ai_back", type="tertiary"):
+        st.session_state.pop("ai_post", None)
+        st.rerun()
+
+    rubric = C.norm_type(post.post_type, rules)
+    meta = " · ".join(x for x in (C.fmt_date_compact(post.date) or "без даты",
+                                  post.brand, rubric) if x)
+
     store = st.session_state.setdefault("ai_res", {})
+    entry = store.get(key)
     chash = config_mod.content_hash(post.text)
-    btn_key = f"ai_btn_{post.sheet}_{post.row}"
 
-    if not api_key:
-        st.button("🤖 Проверить нейросетью", key=btn_key, disabled=True)
-        st.caption("Чтобы включить проверку нейросетью, добавьте ключ Google AI.")
-        return
-
-    if st.button("🤖 Проверить нейросетью", key=btn_key):
+    top = st.columns([6, 3, 3], vertical_alignment="center")
+    top[0].markdown(f"### {meta}")
+    link = C.sheet_link(post.row, post.sheet)
+    if link:
+        top[1].link_button("Открыть в таблице", link, use_container_width=True)
+    run_label = "Проверить заново" if entry else "🤖 Проверить нейросетью"
+    if top[2].button(run_label, key="ai_run", type="primary",
+                     use_container_width=True):
         with st.spinner("Проверяем нейросетью…"):
             res = C.ai_review_post(data, post)
         store[key] = {"hash": chash, "res": res}
+        st.session_state.setdefault("ai_dec", {})[key] = {}  # сброс решений
         if res.get("ok"):
             st.session_state["ai_checked_count"] = \
                 st.session_state.get("ai_checked_count", 0) + 1
@@ -509,57 +563,222 @@ def _ai_section(data: C.AppData, post: PostRecord, key: tuple) -> None:
 
     entry = store.get(key)
     if not entry:
-        st.caption("Нажмите «Проверить нейросетью» — получите советы по тону, "
-                   "структуре и качеству текста. Это платный запрос к Google AI.")
+        st.info("Нажмите «Проверить нейросетью» — сервис пришлёт советы по тону "
+                "и стилю с готовыми вариантами замены. Факты, цифры, ГОСТы и "
+                "контакты нейросеть не трогает, а в таблицу ничего не пишет.")
         return
-    if entry["hash"] != chash:
-        st.caption("⚠️ Текст изменился после проверки — проверьте заново.")
     res = entry["res"]
     if not res.get("ok"):
-        st.caption("Проверка нейросетью не выполнена: " + res.get("error", ""))
+        st.error("Проверка нейросетью не выполнена: " + res.get("error", ""))
         return
-    ai_issues = res.get("issues", [])
-    if not ai_issues:
-        st.caption("Нейросеть замечаний не нашла.")
-        return
-    for n, item in enumerate(ai_issues):
-        _ai_issue_block(post, item, n, key)
-    st.caption("Это советы нейросети, они могут быть неточными. Факты, цифры "
-               "и сроки проверяйте с отделом продаж.")
+    if entry["hash"] != chash:
+        st.warning("⚠️ Текст поста изменился после проверки — нажмите "
+                   "«Проверить заново».")
+
+    issues = res.get("issues", [])
+    left, right = st.columns([1.4, 1], gap="large")
+    with left:
+        _ai_cards(post, key, issues)
+    with right:
+        _ai_preview(post, key, issues)
 
 
-def _ai_issue_block(post: PostRecord, item: dict, n: int, key: tuple) -> None:
-    lvl = Level.WARNING if item.get("level") == "warning" else Level.ADVICE
-    with st.container(border=True):
-        cols = st.columns([9, 1], vertical_alignment="center")
-        with cols[0]:
-            st.markdown(f'🤖 {_tag(lvl)}&nbsp; '
-                        f'<b>{html.escape(item.get("title", ""))}</b>',
-                        unsafe_allow_html=True)
-            if item.get("why"):
-                st.markdown(f'<span style="color:#464646;font-size:14px">'
-                            f'Почему важно: {html.escape(item["why"])}</span>',
+def _ai_cards(post: PostRecord, key: tuple, issues: list[dict]) -> None:
+    dec = _ai_decisions(key)
+    acc = sum(1 for i in range(len(issues))
+              if dec.get(i, {}).get("status") == "accepted")
+    rej = sum(1 for i in range(len(issues))
+              if dec.get(i, {}).get("status") == "rejected")
+    pend = len(issues) - acc - rej
+
+    st.markdown("#### Замечания нейросети")
+    st.markdown(f'<span style="font-size:14px"><b>{pend}</b> ждут решения '
+                f'<span style="color:#464646">· {acc} принято · {rej} отклонено'
+                f'</span></span>', unsafe_allow_html=True)
+
+    if not issues:
+        st.success("Нейросеть замечаний не нашла.")
+        return
+    for i, item in enumerate(issues):
+        _ai_card(post, key, item, i)
+    st.caption("Нейросеть может ошибаться. Факты, цифры и сроки проверяйте "
+               "с отделом продаж.")
+
+
+def _ai_card(post: PostRecord, key: tuple, item: dict, i: int) -> None:
+    dec = _ai_decisions(key)
+    status = dec.get(i, {}).get("status", "pending")
+    title = html.escape(item.get("title", ""))
+    frag = item.get("fragment", "")
+    uid = f"{key[0]}_{key[1]}_{i}"
+
+    # принято / отклонено — компактная строка
+    if status == "accepted":
+        applied = dec[i].get("text", "")
+        with st.container(border=True):
+            row = st.columns([8, 2], vertical_alignment="center")
+            short = _clip(f"«{frag}» → «{applied}»", 80)
+            row[0].markdown(f'<span style="color:#107C10;font-weight:600">'
+                            f'✓ Принято</span> <span style="color:#464646">'
+                            f'{title}:</span> {html.escape(short)}',
                             unsafe_allow_html=True)
-            if item.get("what_to_do"):
-                st.markdown(f'<span style="color:#464646;font-size:13px">'
-                            f'Что сделать: {html.escape(item["what_to_do"])}'
-                            f'</span>', unsafe_allow_html=True)
-            q = item.get("quote", "")
-            if q and q in (post.text or ""):
-                st.markdown(f'<span style="font-size:14px">Фрагмент: '
-                            f'<mark style="background:#FFE26C;color:#1E1E1E;'
-                            f'padding:0 3px;border-radius:2px">{html.escape(q)}'
-                            f'</mark></span>', unsafe_allow_html=True)
-        with cols[1]:
-            if st.button("Не ошибка", key=f"ai_ig_{post.sheet}_{post.row}_{n}",
-                         type="tertiary", help="Скрыть это замечание"):
-                entry = st.session_state.get("ai_res", {}).get(key)
-                if entry and entry["res"].get("issues"):
-                    try:
-                        entry["res"]["issues"].pop(n)
-                    except IndexError:
-                        pass
+            if row[1].button("Отменить", key=f"ai_undo_{uid}", type="tertiary"):
+                dec.pop(i, None)
                 st.rerun()
+        return
+    if status == "rejected":
+        with st.container(border=True):
+            row = st.columns([8, 2], vertical_alignment="center")
+            row[0].markdown(f'<span style="color:#464646;font-weight:600">'
+                            f'Отклонено</span> <span style="color:#464646">'
+                            f'{title}</span>', unsafe_allow_html=True)
+            if row[1].button("Вернуть", key=f"ai_back_{uid}", type="tertiary"):
+                dec.pop(i, None)
+                st.rerun()
+        return
+
+    # ждёт решения
+    lvl = Level.WARNING if item.get("level") == "warning" else Level.ADVICE
+    options = item.get("options", [])
+    with st.container(border=True):
+        st.markdown(f'🤖 {_tag(lvl)}&nbsp; <b>{title}</b>',
+                    unsafe_allow_html=True)
+        if item.get("why"):
+            st.markdown(f'<span style="color:#464646;font-size:14px">'
+                        f'{html.escape(item["why"])}</span>',
+                        unsafe_allow_html=True)
+        if frag:
+            st.markdown('<span style="font-size:12px;font-weight:600;'
+                        'color:#464646">Сейчас в тексте</span>',
+                        unsafe_allow_html=True)
+            st.markdown(f'<div style="padding:8px 12px;background:#EBD7D7;'
+                        f'border-radius:4px;font-size:14px;line-height:20px">'
+                        f'{html.escape(frag)}</div>', unsafe_allow_html=True)
+
+        chosen = None
+        if options:
+            st.markdown('<span style="font-size:12px;font-weight:600;'
+                        'color:#464646">Заменить на</span>',
+                        unsafe_allow_html=True)
+            custom_on = st.toggle("Свой вариант", key=f"ai_custon_{uid}")
+            if custom_on:
+                custom = st.text_area(
+                    "Свой вариант замены", key=f"ai_cust_{uid}",
+                    label_visibility="collapsed",
+                    placeholder="Впишите свой вариант замены фрагмента")
+                chosen = (custom or "").strip()
+            elif len(options) == 1:
+                chosen = options[0]["text"]
+                st.markdown(f'<div style="padding:8px 12px;background:#DADFEC;'
+                            f'border:1px solid #1D42A5;border-radius:4px;'
+                            f'font-size:14px;line-height:20px">'
+                            f'{html.escape(chosen)}</div>',
+                            unsafe_allow_html=True)
+            else:
+                labels = [((o["when"] + ": ") if o.get("when") else "")
+                          + o["text"] for o in options]
+                pick = st.radio("Вариант замены", list(range(len(options))),
+                                format_func=lambda k: labels[k],
+                                key=f"ai_opt_{uid}", label_visibility="collapsed")
+                chosen = options[pick]["text"]
+
+            b = st.columns([2, 2, 3], vertical_alignment="center")
+            if b[0].button("Заменить", key=f"ai_acc_{uid}", type="primary",
+                           use_container_width=True):
+                if chosen:
+                    dec[i] = {"status": "accepted", "text": chosen}
+                    st.rerun()
+                else:
+                    st.warning("Впишите вариант замены.")
+            if b[1].button("Отклонить", key=f"ai_rej_{uid}",
+                           use_container_width=True):
+                dec[i] = {"status": "rejected"}
+                st.rerun()
+        else:
+            # совет без готовой замены (в т.ч. факт/обещание) — только скрыть
+            if st.button("Понятно, скрыть", key=f"ai_hide_{uid}",
+                         type="tertiary"):
+                dec[i] = {"status": "rejected"}
+                st.rerun()
+
+
+def _clip(s: str, limit: int) -> str:
+    s = re.sub(r"\s+", " ", s or "").strip()
+    return s if len(s) <= limit else s[:limit].rstrip() + "…"
+
+
+def _apply_repl(text: str, repl: list[dict]) -> tuple[str, str]:
+    """Разбить текст на сегменты, применяя замены по очереди.
+
+    Возвращает (html-предпросмотр с подсветкой, итоговый обычный текст).
+    """
+    segs = [{"t": text or "", "kind": ""}]
+    for r in repl:
+        new, placed = [], False
+        for g in segs:
+            if placed or g["kind"] or r["from"] not in g["t"]:
+                new.append(g)
+                continue
+            idx = g["t"].index(r["from"])
+            before, after = g["t"][:idx], g["t"][idx + len(r["from"]):]
+            if before:
+                new.append({"t": before, "kind": ""})
+            if r["accepted"]:
+                new.append({"t": r["to"], "kind": "done"})
+            else:
+                new.append({"t": r["from"], "kind": "pending"})
+            if after:
+                new.append({"t": after, "kind": ""})
+            placed = True
+        segs = new
+
+    parts, plain = [], []
+    for g in segs:
+        esc = html.escape(g["t"])
+        if g["kind"] == "pending":
+            parts.append(f'<mark style="background:#FFE26C;color:#1E1E1E;'
+                         f'border-radius:2px">{esc}</mark>')
+        elif g["kind"] == "done":
+            parts.append(f'<mark style="background:#DADFEC;color:#1E1E1E;'
+                         f'box-shadow:inset 0 -1px 0 #1D42A5;'
+                         f'border-radius:2px">{esc}</mark>')
+        else:
+            parts.append(esc)
+        plain.append(g["t"])
+    return "".join(parts), "".join(plain)
+
+
+def _ai_preview(post: PostRecord, key: tuple, issues: list[dict]) -> None:
+    dec = _ai_decisions(key)
+    repl = []
+    for i, item in enumerate(issues):
+        frag = item.get("fragment", "")
+        status = dec.get(i, {}).get("status", "pending")
+        if not frag or status == "rejected":
+            continue
+        repl.append({"from": frag,
+                     "to": dec[i]["text"] if status == "accepted" else frag,
+                     "accepted": status == "accepted"})
+
+    html_preview, final_text = _apply_repl(post.text or "", repl)
+
+    st.markdown("#### Текст поста")
+    st.markdown(
+        '<span style="font-size:12px;color:#464646">'
+        '<span style="background:#FFE26C;border-radius:2px;padding:0 4px">'
+        '&nbsp;</span> к замене &nbsp;&nbsp;'
+        '<span style="background:#DADFEC;border-radius:2px;padding:0 4px;'
+        'box-shadow:inset 0 -1px 0 #1D42A5">&nbsp;</span> заменено</span>',
+        unsafe_allow_html=True)
+    st.markdown(
+        f'<div style="padding:14px 16px;border:1px solid #DFDFDF;'
+        f'border-radius:4px;font-size:14px;line-height:22px;white-space:pre-wrap;'
+        f'max-height:520px;overflow:auto">{html_preview or "(текст не заполнен)"}'
+        f'</div>', unsafe_allow_html=True)
+    st.caption("Так пост будет выглядеть после принятых замен. Текст в таблице "
+               "сам не меняется.")
+    st.markdown("**Итоговый текст** — скопируйте кнопкой в правом углу поля:")
+    st.code(final_text or "", language=None)
 
 
 def _frag_html(text: str, frag: str, words: int = 3):
