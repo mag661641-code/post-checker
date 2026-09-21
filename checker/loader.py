@@ -125,6 +125,34 @@ def _get(colmap: dict[str, int], row: list[Any], *names: str) -> Any:
     return None
 
 
+def _count_dates(grid: list[list[Any]], hdr_i: int, col: Optional[int]) -> int:
+    """Сколько значений в столбце распознаётся как дата (для поиска колонки)."""
+    if col is None:
+        return 0
+    n = 0
+    for i in range(hdr_i + 1, len(grid)):
+        row = grid[i]
+        v = row[col] if col < len(row) else None
+        d, _ = _date_and_note(v)
+        if d is not None:
+            n += 1
+    return n
+
+
+def _detect_date_column(grid: list[list[Any]], hdr_i: int,
+                        min_hits: int = 3) -> Optional[int]:
+    """Найти колонку даты по содержимому — на случай, когда у столбца с датой
+    нет заголовка «Дата» (напр. на листе ИМП). Берём столбец с наибольшим
+    числом распознанных дат."""
+    ncols = max((len(r) for r in grid), default=0)
+    best_col, best = None, 0
+    for c in range(ncols):
+        hits = _count_dates(grid, hdr_i, c)
+        if hits > best:
+            best, best_col = hits, c
+    return best_col if best >= min_hits else None
+
+
 # ---------------------------------------------------------------------------
 # Главный вход
 # ---------------------------------------------------------------------------
@@ -216,9 +244,17 @@ def _load_brand_sheet(ws, brand: str) -> tuple[list[PostRecord], list[dict]]:
     colmap = _column_map(grid[hdr_i])
     post_idx = colmap.get("пост")
 
-    # колонка даты: у разных листов называется по-разному (на СМУ — «Когда выложить»)
-    date_key = next((n for n in DATE_COL_NAMES if n in colmap), "дата")
-    date_col = colmap.get(date_key)
+    # колонка даты: у разных листов называется по-разному (на СМУ — «Когда
+    # выложить»), а на листе ИМП у столбца с датой нет заголовка вовсе.
+    # Сначала ищем по названию; если не нашли или колонка почти без дат —
+    # определяем колонку даты по содержимому.
+    date_key = next((n for n in DATE_COL_NAMES if n in colmap), None)
+    date_col = colmap.get(date_key) if date_key else None
+    if _count_dates(grid, hdr_i, date_col) < 3:
+        alt = _detect_date_column(grid, hdr_i)
+        if alt is not None and _count_dates(grid, hdr_i, alt) > \
+                _count_dates(grid, hdr_i, date_col):
+            date_col = alt
     soc_col = colmap.get("соцсеть")
     link_col = colmap.get("ссылка")
 
