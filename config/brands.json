@@ -3,73 +3,128 @@
     "name": "Стальметурал",
     "site": "stalmetural.ru",
     "email": "info@stalmetural.ru",
-    "phone": "+7 (499) 130-36-69",
-    "required_hashtags_shipment": ["#Отгрузка_СМУ", "#Стальметурал", "#СМУ", "#Металлопрокат"],
-    "telegram": {"clients": "stalmetural", "staff": "SMUdaily"},
+    "phone": "+7 (903) 086-31-16",
+    "required_hashtags_shipment": [
+      "#Отгрузка_СМУ"
+    ],
+    "telegram": {
+      "clients": "stalmetural",
+      "staff": "SMUdaily"
+    },
     "vk_group_id": "-217668235",
     "ok_group_id": "70000004574376",
     "max_channel_id": "-70916890460398",
     "offer_footnote": "Цены и условия актуальны на дату публикации и не являются публичной офертой. Наличие на складе и финальный расчёт подтверждает менеджер при выставлении счёта.",
     "type_rules": {
-      "Поступление": {"phone": true, "email": true},
-      "Праздник": {"hashtags": false}
-    }
+      "Поступление": {
+        "phone": true,
+        "email": true
+      },
+      "Праздник": {
+        "hashtags": false
+      }
+    },
+    "required_hashtags_general": [
+      "#Стальметурал",
+      "#СМУ",
+      "#Металлопрокат"
+    ]
   },
   "ИМП": {
     "name": "Инметпром",
     "site": "inmetprom.ru",
     "email": "info@inmetprom.ru",
     "phone": "+7 (495) 755-36-28",
-    "required_hashtags_shipment": ["#МЕТАЛЛОПРОКАТ", "#ИНМЕТПРОМ", "#ИМП"],
-    "telegram": {"clients": "inmetprom", "staff": "inmetprom"},
+    "required_hashtags_shipment": [],
+    "telegram": {
+      "clients": "inmetprom",
+      "staff": "inmetprom"
+    },
     "vk_group_id": "-224708116",
     "ok_group_id": "70000005388115",
     "max_channel_id": "-70917002032627",
     "offer_footnote": "Цена актуальна на дату публикации и не является публичной офертой – наличие и финальную стоимость подтверждает менеджер.",
     "type_rules": {
-      "Информационный": {"hashtags": true}
-    }
+      "Информационный": {
+        "hashtags": true
+      }
+    },
+    "required_hashtags_general": [
+      "#МЕТАЛЛОПРОКАТ",
+      "#ИНМЕТПРОМ",
+      "#ИМП"
+    ]
   },
   "МПЭ": {
     "name": "Метпромэнерго",
-    "aliases": ["Метпромэнерго", "МЕПЭН"],
+    "aliases": [
+      "Метпромэнерго",
+      "МЕПЭН"
+    ],
     "site": "mepen.ru",
     "email": "info@mepen.ru",
     "phone": "+7 (495) 799-14-38",
-    "required_hashtags_shipment": ["#Отгрузка_МПЭ", "#Метпромэнерго", "#МПЭ"],
-    "telegram": {"clients": "metpromenergo", "staff": "metpromenergo"},
+    "required_hashtags_shipment": [
+      "#Отгрузка_МПЭ"
+    ],
+    "telegram": {
+      "clients": "metpromenergo",
+      "staff": "metpromenergo"
+    },
     "vk_group_id": "-233397949",
     "ok_group_id": "70000042911963",
     "max_channel_id": "-71839887647351",
-    "offer_footnote": "Цена действительна на дату публикации, не является публичной офертой. Наличие и итоговую стоимость с учётом объёма и доставки подтверждает менеджер."
+    "offer_footnote": "Цена действительна на дату публикации, не является публичной офертой. Наличие и итоговую стоимость с учётом объёма и доставки подтверждает менеджер.",
+    "required_hashtags_general": [
+      "#Метпромэнерго",
+      "#МПЭ"
+    ]
   },
   "АПС": {
     "name": "Авиапромсталь",
     "site": "aviastal.ru",
     "email": "",
     "phone": "+7 (495) 755-36-18",
-    "required_hashtags_shipment": ["#Авиапромсталь"],
-    "telegram": {"clients": "aviapromstal_ekb", "staff": "aviapromstal_ekb"},
+    "required_hashtags_shipment": [],
+    "telegram": {
+      "clients": "aviapromstal_ekb",
+      "staff": "aviapromstal_ekb"
+    },
     "vk_group_id": "-214715361",
     "ok_group_id": "70000048012012",
     "max_channel_id": "-77624664889942",
-    "offer_footnote": "Цена действует на дату публикации, не является публичной офертой. Наличие и расчёт – у менеджера."
+    "offer_footnote": "Цена действует на дату публикации, не является публичной офертой. Наличие и расчёт – у менеджера.",
+    "required_hashtags_general": [
+      "#Авиапромсталь"
+    ]
   },
   "МПИ": {
     "name": "МетПромИнтекс",
     "site": "metpromintex.ru",
     "email": "info@metpromintex.ru",
     "phone": "+7 (351) 223-68-30",
-    "required_hashtags_shipment": ["#МетПромИнтекс", "#МПИ"],
+    "required_hashtags_shipment": [],
     "first_hashtag_must_be": "#МетПромИнтекс",
-    "telegram": {"clients": "metpromintex", "staff": "metpromintex"},
+    "telegram": {
+      "clients": "metpromintex",
+      "staff": "metpromintex"
+    },
     "vk_group_id": "-217252669",
     "ok_group_id": "70000052513823",
     "max_channel_id": "-77527437957292",
     "offer_footnote": "⚙️ Цена и размер скидки актуальны на дату публикации и не являются публичной офертой. Наличие уточняйте у менеджера.",
     "type_rules": {
-      "Спецпредложение": {"phone": false, "email": false},
-      "Информационный": {"hashtags": true}
-    }
+      "Спецпредложение": {
+        "phone": false,
+        "email": false
+      },
+      "Информационный": {
+        "hashtags": true
+      }
+    },
+    "required_hashtags_general": [
+      "#МетПромИнтекс",
+      "#МПИ"
+    ]
   }
 }

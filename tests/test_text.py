@@ -75,7 +75,7 @@ def test_photo_filename(brands, rules):
 
 
 def test_contacts_present_ok(brands, rules):
-    text = "Пост\nstalmetural.ru\n+7 (499) 130-36-69"
+    text = "Пост\nstalmetural.ru\n+7 (903) 086-31-16"
     p = _post(text, brand="СМУ", ptype="Отгрузка")
     issues = T.check_contacts_present(p, "СМУ", brands, rules)
     # сайт и телефон на месте — ошибок про их отсутствие нет

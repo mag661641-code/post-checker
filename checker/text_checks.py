@@ -325,18 +325,29 @@ def check_other_brand_name(post: PostRecord, code: str, brands, rules) -> list[I
 # ---------------------------------------------------------------------------
 def check_required_hashtags(post: PostRecord, code: str, brands, rules) -> list[Issue]:
     b = brands.get(code, {})
-    required = b.get("required_hashtags_shipment", [])
     canon_type, _ = N.canonical_post_type(post.post_type,
                                            rules.get("post_type_canonical", {}))
     # хэштеги требуются, если это включено в правилах типа (бренд × тип)
-    if not type_rules_for(code, canon_type, brands, rules)["hashtags"] or not required:
+    if not type_rules_for(code, canon_type, brands, rules)["hashtags"]:
+        return []
+    # общие хэштеги — во всех постах с хэштегами; хэштег отгрузки — только в
+    # «Отгрузке». Старые бренды без «общих» — вся связка считается общей.
+    general = list(b.get("required_hashtags_general", []) or [])
+    shipment = list(b.get("required_hashtags_shipment", []) or [])
+    if not general and shipment:
+        general = shipment  # обратная совместимость со старым единым списком
+        shipment = []
+    required = list(general)
+    if canon_type == "Отгрузка":
+        required += [h for h in shipment if h not in required]
+    if not required:
         return []
     tags = {t.lower() for t in _hashtags(post.text)}
     missing = [h for h in required if h.lower() not in tags]
     if missing:
         return [Issue(
             post.sheet, post.row, "Пост", Level.WARNING, "text_missing_hashtags",
-            f"Нет обязательных хэштегов отгрузки: {', '.join(missing)}.",
+            f"Нет обязательных хэштегов: {', '.join(missing)}.",
             "Добавьте недостающие хэштеги бренда.",
             brand=code, post_type=post.post_type,
         )]
@@ -440,13 +451,15 @@ def check_markdown_stars(post: PostRecord, code: str, brands, rules) -> list[Iss
 # Оформление и типографика
 # ---------------------------------------------------------------------------
 def check_long_dashes(post: PostRecord, code: str, brands, rules) -> list[Issue]:
-    limit = rules.get("thresholds", {}).get("long_dash_max", 3)
-    cnt = post.text.count("—")
-    if cnt > limit:
+    # Ловим самое длинное тире «—» (его часто ставят нейросети). У нас вместо
+    # него используют короткое «–» — оно не считается ошибкой.
+    cnt = (post.text or "").count("—")
+    if cnt:
+        word = "тире" if cnt == 1 else "тире"
         return [Issue(
             post.sheet, post.row, "Пост", Level.ADVICE, "text_dashes",
-            f"Много длинных тире «—»: {cnt} (порог {limit}).",
-            "По правилу используйте меньше длинных тире.",
+            f"В тексте длинное {word} «—» ({cnt} шт.) — его часто ставят нейросети.",
+            "Замените «—» на короткое «–», которое используется у нас.",
             brand=code, post_type=post.post_type,
         )]
     return []
@@ -759,7 +772,6 @@ def check_photo_filename(post: PostRecord, code: str, brands, rules) -> list[Iss
 TEXT_CHECKS = [
     ("text_contacts_present", check_contacts_present),
     ("text_offer_footnote", check_offer_footnote),
-    ("text_short_dash", check_short_dash),
     ("text_shipment_labels", check_shipment_photo_labels),
     ("text_other_brand_contacts", check_other_brand_contacts),
     ("text_other_brand_name", check_other_brand_name),

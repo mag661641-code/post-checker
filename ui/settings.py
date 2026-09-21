@@ -127,7 +127,8 @@ def _add_brand_dialog(brands: dict) -> None:
             st.error("Такой код уже есть.")
         else:
             brands[code] = {"name": name.strip(), "site": "", "email": "",
-                            "phone": "", "required_hashtags_shipment": [],
+                            "phone": "", "required_hashtags_general": [],
+                            "required_hashtags_shipment": [],
                             "telegram": {"clients": "", "staff": ""},
                             "vk_group_id": "", "ok_group_id": "",
                             "max_channel_id": "", "whatsapp_channel": "",
@@ -242,12 +243,24 @@ def _brands() -> None:
     # --- Хэштеги ---
     with st.container(border=True):
         st.markdown("**Хэштеги**")
-        cur_tags = b.get("required_hashtags_shipment", [])
-        tags = st.multiselect(
-            "Обязательные хэштеги в постах-отгрузках", options=cur_tags,
-            default=cur_tags, accept_new_options=True, key=f"tags_{code}",
-            placeholder="Введите хэштег и нажмите Enter")
-        tags = [_norm_hashtag(t) for t in tags if t.strip()]
+        cur_general = b.get("required_hashtags_general", []) or []
+        # обратная совместимость: старый единый список считаем общим
+        if not cur_general and b.get("required_hashtags_shipment"):
+            cur_general = list(b["required_hashtags_shipment"])
+            cur_ship = []
+        else:
+            cur_ship = b.get("required_hashtags_shipment", []) or []
+        general = st.multiselect(
+            "Обязательные хэштеги (во всех постах с хэштегами)",
+            options=cur_general, default=cur_general, accept_new_options=True,
+            key=f"tags_g_{code}", placeholder="Введите хэштег и нажмите Enter")
+        general = [_norm_hashtag(t) for t in general if t.strip()]
+        ship = st.multiselect(
+            "Хэштег(и) отгрузки (только в постах типа «Отгрузка»)",
+            options=cur_ship, default=cur_ship, accept_new_options=True,
+            key=f"tags_s_{code}", placeholder="напр., #Отгрузка_СМУ")
+        ship = [_norm_hashtag(t) for t in ship if t.strip()]
+        tags = general + ship
         first_opts = ["Не важно"] + tags
         cur_first = b.get("first_hashtag_must_be") or "Не важно"
         if cur_first not in first_opts:
@@ -255,8 +268,10 @@ def _brands() -> None:
         first = st.selectbox("Хэштег, который должен стоять первым", first_opts,
                              index=first_opts.index(cur_first),
                              key=f"first_{code}")
-        if tags:
-            st.caption("В посте должно быть: " + " ".join(tags))
+        if general:
+            st.caption("Во всех постах: " + " ".join(general))
+        if ship:
+            st.caption("Дополнительно в отгрузках: " + " ".join(ship))
 
     # --- Правила проверки по типам (переопределение для бренда) ---
     all_rules = config_mod.load_rules()
@@ -381,7 +396,8 @@ def _brands() -> None:
             "email": email.strip(),
             "phone": phone.strip(),
             "enabled": enabled,
-            "required_hashtags_shipment": tags,
+            "required_hashtags_general": general,
+            "required_hashtags_shipment": ship,
             "first_hashtag_must_be": None if first == "Не важно" else first,
             "telegram": {"clients": cid, "staff": sid},
             "vk_group_id": vk_id, "ok_group_id": ok_id,
@@ -433,8 +449,6 @@ CHECK_META = [
       "text_site_anchor_no_link", "text_type_unknown"], "error"),
     ("text_offer_footnote", "Контакты", "Сноска в спецпредложении",
      "про цену и оферту", ["text_offer_footnote", "text_footnote_star"], "warning"),
-    ("text_short_dash", "Типографика", "Короткое тире «–»",
-     "по умолчанию выкл.", ["text_short_dash"], "advice"),
     ("text_shipment_labels", "Фото", "ЛОГО/БЕЗ ЛОГО у отгрузок",
      "нужны обе строки", ["text_shipment_labels"], "warning"),
     ("text_other_brand_contacts", "Контакты", "Контакты чужого бренда", "",
@@ -455,8 +469,8 @@ CHECK_META = [
     ("text_prompt_leftovers", "Шаблоны", "Куски промта в тексте", "",
      ["text_prompt"], "error"),
     ("text_markdown_stars", "Шаблоны", "Звёздочки разметки *…*", "", ["text_stars"], "warning"),
-    ("text_long_dashes", "Типографика", "Длинные тире «—»", "больше порога",
-     ["text_dashes"], "advice"),
+    ("text_long_dashes", "Типографика", "Длинное тире «—»",
+     "нейросети ставят «—», у нас «–»", ["text_dashes"], "advice"),
     ("text_colon_in_list", "Типографика", "Двоеточие в пунктах списка",
      "МПЭ, АПС, МПИ", ["text_list_colon"], "warning"),
     ("text_whitespace", "Типографика", "Лишние пробелы и пустые строки", "",
@@ -508,12 +522,10 @@ def _checks() -> None:
     st.markdown("**Числовые параметры**")
     th = rules.get("thresholds", {})
     online = rules.get("online", {})
-    cc = st.columns(3)
-    dash = cc[0].number_input("Допустимо длинных тире на пост", 0, 50,
-                              int(th.get("long_dash_max", 3)), key="th_dash")
-    cap = cc[1].number_input("Лимит подписи к фото (Telegram)", 100, 4096,
+    cc = st.columns(2)
+    cap = cc[0].number_input("Лимит подписи к фото (Telegram)", 100, 4096,
                              int(th.get("telegram_caption_limit", 1024)), key="th_cap")
-    msg = cc[2].number_input("Лимит сообщения (Telegram)", 100, 8192,
+    msg = cc[1].number_input("Лимит сообщения (Telegram)", 100, 8192,
                              int(th.get("telegram_message_limit", 4096)), key="th_msg")
     cc2 = st.columns(3)
     win = cc2[0].number_input("Окно поиска поста к празднику, ± дней", 0, 30,
@@ -532,7 +544,7 @@ def _checks() -> None:
             for code in codes:
                 rules.setdefault("check_levels", {})[code] = lvl
         rules.setdefault("thresholds", {}).update({
-            "long_dash_max": int(dash), "telegram_caption_limit": int(cap),
+            "telegram_caption_limit": int(cap),
             "telegram_message_limit": int(msg), "holiday_window_days": int(win),
             "online_similarity_threshold": int(sim)})
         rules.setdefault("online", {})["pause_seconds"] = float(pause)
