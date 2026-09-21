@@ -487,21 +487,18 @@ def _issue_block(post: PostRecord, iss: Issue, n: int) -> None:
 # ---------------------------------------------------------------------------
 def _ai_section(data: C.AppData, post: PostRecord, key: tuple) -> None:
     st.divider()
-    row = st.columns([6, 3], vertical_alignment="center")
-    row[0].markdown("**Замечания нейросети** 🤖")
+    st.markdown("**Замечания нейросети** 🤖")
     api_key = C.get_ai_key()
     store = st.session_state.setdefault("ai_res", {})
     chash = config_mod.content_hash(post.text)
     btn_key = f"ai_btn_{post.sheet}_{post.row}"
 
     if not api_key:
-        row[1].button("🤖 Проверить нейросетью", key=btn_key, disabled=True,
-                      use_container_width=True)
+        st.button("🤖 Проверить нейросетью", key=btn_key, disabled=True)
         st.caption("Чтобы включить проверку нейросетью, добавьте ключ Google AI.")
         return
 
-    if row[1].button("🤖 Проверить нейросетью", key=btn_key,
-                     use_container_width=True):
+    if st.button("🤖 Проверить нейросетью", key=btn_key):
         with st.spinner("Проверяем нейросетью…"):
             res = C.ai_review_post(data, post)
         store[key] = {"hash": chash, "res": res}

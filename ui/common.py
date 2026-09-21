@@ -742,21 +742,15 @@ def get_ai_key() -> Optional[str]:
         return None
 
 
-@st.cache_data(show_spinner=False)
-def _cached_ai_review(text: str, brand: str, post_type: str, date: str,
-                      tone: str, avoid: str, structure: str,
-                      settings_sig: str, api_key: str) -> dict:
-    import json as _json
-    from checker import ai_review
-    settings = _json.loads(settings_sig)
-    return ai_review.review(text, brand, post_type, date, tone, avoid,
-                            structure, settings, api_key)
-
-
 def ai_review_post(data: "AppData", post: PostRecord) -> dict:
-    """Проверить пост нейросетью (с кешем по тексту). Возвращает
-    {"ok": True, "issues": [...]} или {"ok": False, "error": "…"}."""
+    """Проверить пост нейросетью. Возвращает {"ok": True, "issues": [...]}
+    или {"ok": False, "error": "…"}.
+
+    Кешируем в session_state ТОЛЬКО успешные ответы (по хэшу текста+настроек),
+    чтобы не гонять один и тот же текст повторно, но и не «залипать» на ошибке.
+    """
     import json as _json
+    import hashlib
     from checker import ai_review
     api_key = get_ai_key()
     if not api_key:
@@ -766,11 +760,20 @@ def ai_review_post(data: "AppData", post: PostRecord) -> dict:
     brand = cfg["brands"].get(post.brand, {})
     structure = (cfg["rules"].get("post_type_structure", {})
                  .get(norm_type(post.post_type, cfg["rules"]), ""))
-    return _cached_ai_review(
+    settings_sig = _json.dumps(settings, ensure_ascii=False, sort_keys=True)
+    ckey = hashlib.sha1(
+        ((post.text or "") + "|" + settings_sig).encode("utf-8")).hexdigest()
+    cache = st.session_state.setdefault("_ai_cache", {})
+    if ckey in cache:
+        return cache[ckey]
+    res = ai_review.review(
         post.text or "", post.brand, post.post_type,
         fmt_date_short(post.date) if post.date else "",
         brand.get("tone", ""), brand.get("avoid", ""), structure,
-        _json.dumps(settings, ensure_ascii=False, sort_keys=True), api_key)
+        settings, api_key)
+    if res.get("ok"):
+        cache[ckey] = res  # ошибки не кешируем — можно повторить
+    return res
 
 
 # ---------------------------------------------------------------------------
