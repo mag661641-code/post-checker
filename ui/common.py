@@ -244,6 +244,17 @@ def pull_settings() -> None:
     url, sa = settings_url(), get_service_account()
     if not url or not sa:
         return
+    # сохранённые результаты нейросети (отдельная ячейка) — чтобы после
+    # перезагрузки не платить за повторную проверку неизменившихся постов
+    try:
+        from checker import settings_store
+        ai_cache = settings_store.read_ai_cache(url, sa)
+        if ai_cache:
+            st.session_state["_ai_cache"] = {
+                k: {"ok": True, "issues": v.get("issues", [])}
+                for k, v in ai_cache.items() if isinstance(v, dict)}
+    except Exception:  # noqa: BLE001
+        pass
     try:
         from checker import settings_store
         bundle = settings_store.read_bundle(url, sa)
@@ -742,6 +753,54 @@ def get_ai_key() -> Optional[str]:
         return None
 
 
+def ai_result_for(post: PostRecord) -> Optional[dict]:
+    """Актуальный результат проверки нейросетью для поста (или None).
+
+    Актуальный = проверка была успешной и текст поста с тех пор не менялся.
+    """
+    entry = st.session_state.get("ai_res", {}).get((post.sheet, post.row))
+    if not entry or not entry["res"].get("ok"):
+        return None
+    if entry.get("hash") != config_mod.content_hash(post.text):
+        return None
+    return entry["res"]
+
+
+def ai_issues_for_report(
+        filtered: list[tuple[PostRecord, list[Issue]]]) -> list[Issue]:
+    """Превратить замечания нейросети (из session_state) в объекты Issue для
+    Excel-отчёта. Только по постам выборки и только актуальные результаты."""
+    from checker.ai_review import CODE_BY_CATEGORY
+    out: list[Issue] = []
+    for post, _ in filtered:
+        res = ai_result_for(post)
+        if not res:
+            continue
+        for item in res.get("issues", []):
+            cat = str(item.get("category", "quality"))
+            code = CODE_BY_CATEGORY.get(cat, "ai_quality")
+            level = Level.WARNING if item.get("level") == "warning" \
+                else Level.ADVICE
+            message = item.get("title", "")
+            if item.get("why"):
+                message = (message + ". " + item["why"]).strip()
+            opts = item.get("options", [])
+            fix = ("Вариант замены: " + opts[0]["text"]) if opts else ""
+            out.append(Issue(sheet=post.sheet, row=post.row, column="Пост",
+                             level=level, code=code, message=message, fix=fix,
+                             brand=post.brand, post_type=post.post_type))
+    return out
+
+
+def _ai_cache_key(text: str, settings: dict) -> str:
+    """Ключ кеша результата = текст поста + настройки нейросети."""
+    import json as _json
+    import hashlib
+    sig = _json.dumps(settings, ensure_ascii=False, sort_keys=True)
+    return hashlib.sha1(
+        ((text or "") + "|" + sig).encode("utf-8")).hexdigest()
+
+
 def ai_review_post(data: "AppData", post: PostRecord) -> dict:
     """Проверить пост нейросетью. Возвращает {"ok": True, "issues": [...]}
     или {"ok": False, "error": "…"}.
@@ -749,8 +808,6 @@ def ai_review_post(data: "AppData", post: PostRecord) -> dict:
     Кешируем в session_state ТОЛЬКО успешные ответы (по хэшу текста+настроек),
     чтобы не гонять один и тот же текст повторно, но и не «залипать» на ошибке.
     """
-    import json as _json
-    import hashlib
     from checker import ai_review
     api_key = get_ai_key()
     if not api_key:
@@ -760,9 +817,7 @@ def ai_review_post(data: "AppData", post: PostRecord) -> dict:
     brand = cfg["brands"].get(post.brand, {})
     structure = (cfg["rules"].get("post_type_structure", {})
                  .get(norm_type(post.post_type, cfg["rules"]), ""))
-    settings_sig = _json.dumps(settings, ensure_ascii=False, sort_keys=True)
-    ckey = hashlib.sha1(
-        ((post.text or "") + "|" + settings_sig).encode("utf-8")).hexdigest()
+    ckey = _ai_cache_key(post.text or "", settings)
     cache = st.session_state.setdefault("_ai_cache", {})
     if ckey in cache:
         return cache[ckey]
@@ -774,6 +829,47 @@ def ai_review_post(data: "AppData", post: PostRecord) -> dict:
     if res.get("ok"):
         cache[ckey] = res  # ошибки не кешируем — можно повторить
     return res
+
+
+def sync_ai_res_from_cache(data: "AppData") -> None:
+    """Восстановить результаты нейросети для постов из сохранённого кеша
+    (после перезагрузки облака) — без обращения к сети и без оплаты."""
+    cache = st.session_state.get("_ai_cache", {})
+    if not cache:
+        return
+    from checker import ai_review
+    settings = ai_review.ai_settings(data.cfg["rules"])
+    store = st.session_state.setdefault("ai_res", {})
+    for p in data.posts:
+        key = (p.sheet, p.row)
+        if key in store:
+            continue
+        ckey = _ai_cache_key(p.text or "", settings)
+        cached = cache.get(ckey)
+        if cached and cached.get("ok"):
+            store[key] = {"hash": config_mod.content_hash(p.text),
+                          "res": cached}
+
+
+def persist_ai_cache() -> bool:
+    """Сохранить успешные результаты нейросети в таблицу настроек (отдельная
+    ячейка). Возвращает True, если записали."""
+    url, sa = settings_url(), get_service_account()
+    if not url or not sa:
+        return False
+    cache = st.session_state.get("_ai_cache", {})
+    if not cache:
+        return False
+    payload = {k: {"issues": v.get("issues", [])}
+               for k, v in cache.items() if v.get("ok")}
+    if not payload:
+        return False
+    try:
+        from checker import settings_store
+        settings_store.write_ai_cache(url, sa, payload)
+        return True
+    except Exception:  # noqa: BLE001
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -1005,6 +1101,8 @@ def build_report_bytes(data: AppData,
         if i.sheet == loader_mod.REGISTRY_SHEET:
             if period_matches(issue_date(i, data), period):
                 issues.append(i)
+    # замечания нейросети (если посты проверяли) — попадают в лист «Тексты»
+    issues.extend(ai_issues_for_report(filtered))
 
     summary = summarize(issues, len(filtered))
     try:

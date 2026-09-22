@@ -16,6 +16,10 @@ from . import gsheets
 
 WRITE_SCOPE = "https://www.googleapis.com/auth/spreadsheets"
 CELL = "A1"
+# Результаты проверки нейросетью храним в отдельной ячейке, чтобы даже при
+# переполнении они не могли испортить основные настройки в A1.
+AI_CELL = "A2"
+AI_MAX_CHARS = 45000  # в ячейке Google Sheets лимит ~50 000 символов
 
 
 def _service(sa: Any):
@@ -58,3 +62,39 @@ def write_bundle(url: str, sa: Any, bundle: dict) -> None:
     svc.spreadsheets().values().update(
         spreadsheetId=sid, range=rng, valueInputOption="RAW",
         body=body).execute()
+
+
+def read_ai_cache(url: str, sa: Any) -> dict:
+    """Прочитать сохранённые результаты проверки нейросетью ({} если пусто)."""
+    svc = _service(sa)
+    sid = gsheets.extract_sheet_id(url)
+    rng = f"'{_first_sheet_title(svc, sid)}'!{AI_CELL}"
+    res = svc.spreadsheets().values().get(
+        spreadsheetId=sid, range=rng).execute()
+    vals = res.get("values", [])
+    if not vals or not vals[0] or not str(vals[0][0]).strip():
+        return {}
+    try:
+        data = json.loads(vals[0][0])
+        return data if isinstance(data, dict) else {}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def write_ai_cache(url: str, sa: Any, cache: dict) -> None:
+    """Записать результаты проверки нейросетью в отдельную ячейку.
+
+    Если данных слишком много для одной ячейки — отбрасываем самые старые
+    (первые по порядку добавления), пока не влезет."""
+    items = list(cache.items())
+    payload = json.dumps(dict(items), ensure_ascii=False)
+    while len(payload) > AI_MAX_CHARS and len(items) > 1:
+        drop = max(1, len(items) // 10)
+        items = items[drop:]  # выбрасываем самые старые
+        payload = json.dumps(dict(items), ensure_ascii=False)
+    svc = _service(sa)
+    sid = gsheets.extract_sheet_id(url)
+    rng = f"'{_first_sheet_title(svc, sid)}'!{AI_CELL}"
+    svc.spreadsheets().values().update(
+        spreadsheetId=sid, range=rng, valueInputOption="RAW",
+        body={"values": [[payload]]}).execute()

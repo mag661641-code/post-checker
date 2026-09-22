@@ -11,11 +11,13 @@ import calendar as _cal
 import datetime as dt
 import html
 import re
+import time
 
 import pandas as pd
 import streamlit as st
 
 from checker import config_mod
+from checker import ai_review as ai_review_mod
 from checker.models import Issue, Level, PostRecord
 from ui import common as C
 
@@ -131,6 +133,7 @@ def render() -> None:
 
     data = C.build_app_data(file_bytes)
     C.ensure_period(data)
+    C.sync_ai_res_from_cache(data)  # восстановить сохранённые проверки нейросети
     period = C.current_period()
 
     # --- состояние экрана ---
@@ -240,6 +243,9 @@ def _set_period(year: int, month: int) -> None:
 # Вкладка «Посты»
 # ---------------------------------------------------------------------------
 def _view_posts(data: C.AppData, base, period) -> None:
+    # --- массовая проверка нейросетью + счётчик ---
+    _ai_bulk_bar(data, base)
+
     # --- KPI-карточки ---
     total = len(base)
     with_issues = sum(1 for _, iss in base if iss)
@@ -525,6 +531,87 @@ def _ai_pending_count(key: tuple) -> int:
                if dec.get(i, {}).get("status") not in ("accepted", "rejected"))
 
 
+def _ai_done(store: dict, post: PostRecord) -> bool:
+    """Пост уже успешно проверен нейросетью и текст с тех пор не менялся."""
+    e = store.get((post.sheet, post.row))
+    return bool(e and e["res"].get("ok")
+                and e["hash"] == config_mod.content_hash(post.text))
+
+
+def _ai_bulk_bar(data: C.AppData, base) -> None:
+    """Счётчик проверенных постов + кнопка «Проверить все нейросетью»."""
+    if not C.get_ai_key():
+        return
+    posts = [p for p, _ in base if (p.text or "").strip()]
+    total = len(posts)
+    if not total:
+        return
+    store = st.session_state.setdefault("ai_res", {})
+    done = sum(1 for p in posts if _ai_done(store, p))
+
+    row = st.columns([6, 3], vertical_alignment="center")
+    row[0].caption(f"🤖 Нейросеть: проверено {done} из {total} постов выборки")
+    left = total - done
+    label = ("Все посты проверены" if left == 0
+             else f"🤖 Проверить остальные ({left})")
+    if row[1].button(label, key="ai_bulk_open", use_container_width=True,
+                     disabled=(left == 0)):
+        st.session_state["ai_bulk_confirm"] = True
+        st.rerun()
+
+    if st.session_state.get("ai_bulk_confirm"):
+        with st.container(border=True):
+            st.warning(f"Проверить нейросетью {left} "
+                       f"{C.plural(left, 'пост', 'поста', 'постов')}? "
+                       "Это платные запросы к Google AI — по одному на пост.")
+            cc = st.columns([2, 2, 5])
+            if cc[0].button("Да, проверить", type="primary", key="ai_bulk_go"):
+                st.session_state["ai_bulk_confirm"] = False
+                st.session_state["ai_bulk_go_run"] = True
+                st.rerun()
+            if cc[1].button("Отмена", key="ai_bulk_cancel"):
+                st.session_state["ai_bulk_confirm"] = False
+                st.rerun()
+
+    if st.session_state.get("ai_bulk_go_run"):
+        st.session_state["ai_bulk_go_run"] = False
+        _ai_bulk_run(data, posts)
+
+
+def _ai_bulk_run(data: C.AppData, posts) -> None:
+    store = st.session_state.setdefault("ai_res", {})
+    pending = [p for p in posts if not _ai_done(store, p)]
+    if not pending:
+        st.success("Все посты уже проверены.")
+        return
+    pause = float(ai_review_mod.ai_settings(data.cfg["rules"])
+                  .get("pause_seconds", 1.0) or 0)
+    ok = err = 0
+    with st.status(f"Проверяю нейросетью… 0 из {len(pending)}",
+                   expanded=True) as status:
+        for n, p in enumerate(pending, 1):
+            res = C.ai_review_post(data, p)
+            store[(p.sheet, p.row)] = {
+                "hash": config_mod.content_hash(p.text), "res": res}
+            if res.get("ok"):
+                ok += 1
+            else:
+                err += 1
+                status.write(f"⚠️ {p.brand}, строка {p.row}: "
+                             f"{res.get('error', '')}")
+            status.update(label=f"Проверяю нейросетью… {n} из {len(pending)}")
+            if pause and n < len(pending):
+                time.sleep(pause)
+        st.session_state["ai_checked_count"] = \
+            st.session_state.get("ai_checked_count", 0) + ok
+        state = "complete" if err == 0 else "error"
+        status.update(state=state,
+                      label=f"Готово. Проверено {ok}"
+                            + (f", с ошибкой {err}" if err else "") + ".")
+    if ok:
+        C.persist_ai_cache()  # сохранить, чтобы после перезагрузки не платить
+
+
 def _ai_page(data: C.AppData, post: PostRecord, period) -> None:
     rules = data.cfg["rules"]
     key = (post.sheet, post.row)
@@ -559,6 +646,7 @@ def _ai_page(data: C.AppData, post: PostRecord, period) -> None:
         if res.get("ok"):
             st.session_state["ai_checked_count"] = \
                 st.session_state.get("ai_checked_count", 0) + 1
+            C.persist_ai_cache()  # сохранить результат до перезагрузки
         st.rerun()
 
     entry = store.get(key)
