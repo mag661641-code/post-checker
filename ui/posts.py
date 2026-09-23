@@ -18,6 +18,7 @@ import streamlit as st
 
 from checker import config_mod
 from checker import ai_review as ai_review_mod
+from checker import text_checks
 from checker.models import Issue, Level, PostRecord
 from ui import common as C
 
@@ -627,48 +628,83 @@ def _ai_page(data: C.AppData, post: PostRecord, period) -> None:
     meta = " · ".join(x for x in (C.fmt_date_compact(post.date) or "без даты",
                                   post.brand, rubric) if x)
 
+    # пост, где в ячейке по сути только ссылка на документ/статью
+    only = text_checks._content_only_link(post)
+    is_external = bool(only and only[0] in ("gdoc", "dzen"))
+    ext_store = st.session_state.setdefault("ai_ext_text", {})
+    review_text = ext_store.get(key, post.text)
+
     store = st.session_state.setdefault("ai_res", {})
     entry = store.get(key)
-    chash = config_mod.content_hash(post.text)
+    chash = config_mod.content_hash(review_text)
 
     top = st.columns([6, 3, 3], vertical_alignment="center")
     top[0].markdown(f"### {meta}")
     link = C.sheet_link(post.row, post.sheet)
     if link:
         top[1].link_button("Открыть в таблице", link, use_container_width=True)
-    run_label = "Проверить заново" if entry else "🤖 Проверить нейросетью"
+
+    need_fetch = is_external and key not in ext_store
+    if need_fetch:
+        run_label = "🤖 Загрузить текст и проверить"
+    else:
+        run_label = "Проверить заново" if entry else "🤖 Проверить нейросетью"
+
     if top[2].button(run_label, key="ai_run", type="primary",
                      use_container_width=True):
-        with st.spinner("Проверяем нейросетью…"):
-            res = C.ai_review_post(data, post)
-        store[key] = {"hash": chash, "res": res}
-        st.session_state.setdefault("ai_dec", {})[key] = {}  # сброс решений
-        if res.get("ok"):
-            st.session_state["ai_checked_count"] = \
-                st.session_state.get("ai_checked_count", 0) + 1
-            C.persist_ai_cache()  # сохранить результат до перезагрузки
-        st.rerun()
+        text_for_review, fetch_err = review_text, None
+        if need_fetch:
+            with st.spinner("Загружаю текст по ссылке…"):
+                fetched, _kind, fetch_err = C.fetch_post_link_text(post)
+            if not fetch_err:
+                ext_store[key] = fetched
+                text_for_review = fetched
+        if fetch_err:
+            st.error(fetch_err)  # без rerun — чтобы сообщение осталось
+        else:
+            with st.spinner("Проверяем нейросетью…"):
+                res = C.ai_review_post(data, post, text_override=text_for_review)
+            store[key] = {"hash": config_mod.content_hash(text_for_review),
+                          "res": res}
+            st.session_state.setdefault("ai_dec", {})[key] = {}  # сброс решений
+            if res.get("ok"):
+                st.session_state["ai_checked_count"] = \
+                    st.session_state.get("ai_checked_count", 0) + 1
+                C.persist_ai_cache()
+            st.rerun()
+
+    # пояснение для постов-ссылок
+    if is_external:
+        if only[0] == "gdoc":
+            st.caption("📄 Текст поста — в Google Документе. Сервис прочитает его "
+                       "по ссылке, если документ доступен сервисному аккаунту "
+                       "или открыт по ссылке.")
+        else:
+            st.caption("📄 Текст поста — статья в Дзене. Сервис попробует "
+                       "прочитать её по ссылке (получается не всегда).")
 
     entry = store.get(key)
     if not entry:
-        st.info("Нажмите «Проверить нейросетью» — сервис пришлёт советы по тону "
-                "и стилю с готовыми вариантами замены. Факты, цифры, ГОСТы и "
-                "контакты нейросеть не трогает, а в таблицу ничего не пишет.")
+        if not is_external:
+            st.info("Нажмите «Проверить нейросетью» — сервис пришлёт советы по "
+                    "тону и стилю с готовыми вариантами замены. Факты, цифры, "
+                    "ГОСТы и контакты нейросеть не трогает, а в таблицу ничего "
+                    "не пишет.")
         return
     res = entry["res"]
     if not res.get("ok"):
         st.error("Проверка нейросетью не выполнена: " + res.get("error", ""))
         return
     if entry["hash"] != chash:
-        st.warning("⚠️ Текст поста изменился после проверки — нажмите "
-                   "«Проверить заново».")
+        st.warning("⚠️ Текст изменился после проверки — нажмите «Проверить "
+                   "заново».")
 
     issues = res.get("issues", [])
     left, right = st.columns([1.4, 1], gap="large")
     with left:
         _ai_cards(post, key, issues)
     with right:
-        _ai_preview(post, key, issues)
+        _ai_preview(post, key, issues, review_text)
 
 
 def _ai_cards(post: PostRecord, key: tuple, issues: list[dict]) -> None:
@@ -836,7 +872,8 @@ def _apply_repl(text: str, repl: list[dict]) -> tuple[str, str]:
     return "".join(parts), "".join(plain)
 
 
-def _ai_preview(post: PostRecord, key: tuple, issues: list[dict]) -> None:
+def _ai_preview(post: PostRecord, key: tuple, issues: list[dict],
+                text: str) -> None:
     dec = _ai_decisions(key)
     repl = []
     for i, item in enumerate(issues):
@@ -848,7 +885,7 @@ def _ai_preview(post: PostRecord, key: tuple, issues: list[dict]) -> None:
                      "to": dec[i]["text"] if status == "accepted" else frag,
                      "accepted": status == "accepted"})
 
-    html_preview, final_text = _apply_repl(post.text or "", repl)
+    html_preview, final_text = _apply_repl(text or "", repl)
 
     st.markdown("#### Текст поста")
     st.markdown(

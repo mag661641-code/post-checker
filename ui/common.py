@@ -801,9 +801,25 @@ def _ai_cache_key(text: str, settings: dict) -> str:
         ((text or "") + "|" + sig).encode("utf-8")).hexdigest()
 
 
-def ai_review_post(data: "AppData", post: PostRecord) -> dict:
+def fetch_post_link_text(post: PostRecord) -> tuple[str, str, Optional[str]]:
+    """Подгрузить текст поста из внешней ссылки (Google Документ или Дзен).
+
+    Возвращает (текст, тип, ошибка). тип: gdoc / dzen / other."""
+    from checker import text_checks, content_fetch
+    only = text_checks._content_only_link(post)
+    if not only:
+        return "", "", "У поста нет ссылки на документ или статью."
+    _, url = only
+    return content_fetch.fetch_link_text(url, get_service_account())
+
+
+def ai_review_post(data: "AppData", post: PostRecord,
+                   text_override: Optional[str] = None) -> dict:
     """Проверить пост нейросетью. Возвращает {"ok": True, "issues": [...]}
     или {"ok": False, "error": "…"}.
+
+    text_override — если задан, проверяем этот текст (например, подгруженный из
+    Google Документа или статьи Дзена), а не текст из ячейки.
 
     Кешируем в session_state ТОЛЬКО успешные ответы (по хэшу текста+настроек),
     чтобы не гонять один и тот же текст повторно, но и не «залипать» на ошибке.
@@ -817,12 +833,13 @@ def ai_review_post(data: "AppData", post: PostRecord) -> dict:
     brand = cfg["brands"].get(post.brand, {})
     structure = (cfg["rules"].get("post_type_structure", {})
                  .get(norm_type(post.post_type, cfg["rules"]), ""))
-    ckey = _ai_cache_key(post.text or "", settings)
+    text = post.text if text_override is None else text_override
+    ckey = _ai_cache_key(text or "", settings)
     cache = st.session_state.setdefault("_ai_cache", {})
     if ckey in cache:
         return cache[ckey]
     res = ai_review.review(
-        post.text or "", post.brand, post.post_type,
+        text or "", post.brand, post.post_type,
         fmt_date_short(post.date) if post.date else "",
         brand.get("tone", ""), brand.get("avoid", ""), structure,
         settings, api_key)
