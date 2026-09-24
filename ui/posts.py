@@ -393,9 +393,17 @@ def _post_list(data: C.AppData, disp) -> tuple:
 
     cur = st.session_state.get("sel_post")
     if cur not in keys:
-        # по умолчанию — первый пост с ошибкой, иначе первый
-        cur = next((keys[i] for i, (_, iss) in enumerate(disp)
-                    if _post_sev(iss) == Level.ERROR), keys[0])
+        # по умолчанию — пост ближайшего дня публикации (сегодня или дальше),
+        # иначе ближайший прошедший, иначе первый в списке
+        today = C.moscow_today()
+        dated = [(i, p.date) for i, (p, _) in enumerate(disp) if p.date]
+        upcoming = [(d, i) for i, d in dated if d >= today]
+        if upcoming:
+            cur = keys[min(upcoming)[1]]
+        elif dated:
+            cur = keys[max(dated, key=lambda x: x[1])[0]]
+        else:
+            cur = keys[0]
         st.session_state["sel_post"] = cur
     return cur
 
@@ -442,16 +450,29 @@ def _post_card(data: C.AppData, by_key: dict, sel_key: tuple) -> None:
         # смысловая проверка нейросетью — на отдельном экране
         st.divider()
         st.markdown("**Замечания нейросети** 🤖")
+        only = text_checks._content_only_link(post)
+        is_external = bool(only and only[0] in ("gdoc", "dzen"))
         if C.get_ai_key():
             n_ai = _ai_pending_count(sel_key)
             hint = f" · {n_ai} на рассмотрении" if n_ai else ""
-            if st.button(f"🤖 Проверить текст нейросетью{hint}",
-                         key=f"open_ai_{post.sheet}_{post.row}",
+            label = ("🤖 Загрузить текст и проверить" if is_external
+                     else f"🤖 Проверить текст нейросетью{hint}")
+            if st.button(label, key=f"open_ai_{post.sheet}_{post.row}",
                          use_container_width=True, type="secondary"):
                 st.session_state["ai_post"] = sel_key
+                if is_external:
+                    # для постов-ссылок сразу подгрузим текст и проверим
+                    st.session_state["ai_autorun"] = sel_key
                 st.rerun()
-            st.caption("Откроется отдельный экран: советы по тону и стилю с "
-                       "готовыми вариантами замены. Это платный запрос к Google AI.")
+            if is_external:
+                where = ("Google Документа" if only[0] == "gdoc"
+                         else "статьи Дзена")
+                st.caption(f"Текст поста — из {where}. Сервис подгрузит его по "
+                           "ссылке и проверит. Это платный запрос к Google AI.")
+            else:
+                st.caption("Откроется отдельный экран: советы по тону и стилю с "
+                           "готовыми вариантами замены. Это платный запрос к "
+                           "Google AI.")
         else:
             st.button("🤖 Проверить текст нейросетью", disabled=True,
                       key=f"open_ai_{post.sheet}_{post.row}",
@@ -613,6 +634,32 @@ def _ai_bulk_run(data: C.AppData, posts) -> None:
         C.persist_ai_cache()  # сохранить, чтобы после перезагрузки не платить
 
 
+def _ai_do_check(data: C.AppData, post: PostRecord, key: tuple,
+                 need_fetch: bool, review_text: str, store: dict,
+                 ext_store: dict) -> None:
+    """Выполнить проверку нейросетью: при необходимости подгрузить текст из
+    ссылки, затем прогнать проверку и сохранить результат."""
+    text_for_review, fetch_err = review_text, None
+    if need_fetch:
+        with st.spinner("Загружаю текст по ссылке…"):
+            fetched, _kind, fetch_err = C.fetch_post_link_text(post)
+        if not fetch_err:
+            ext_store[key] = fetched
+            text_for_review = fetched
+    if fetch_err:
+        st.error(fetch_err)  # без rerun — чтобы сообщение осталось
+        return
+    with st.spinner("Проверяем нейросетью…"):
+        res = C.ai_review_post(data, post, text_override=text_for_review)
+    store[key] = {"hash": config_mod.content_hash(text_for_review), "res": res}
+    st.session_state.setdefault("ai_dec", {})[key] = {}  # сброс решений
+    if res.get("ok"):
+        st.session_state["ai_checked_count"] = \
+            st.session_state.get("ai_checked_count", 0) + 1
+        C.persist_ai_cache()
+    st.rerun()
+
+
 def _ai_page(data: C.AppData, post: PostRecord, period) -> None:
     rules = data.cfg["rules"]
     key = (post.sheet, post.row)
@@ -652,26 +699,12 @@ def _ai_page(data: C.AppData, post: PostRecord, period) -> None:
 
     if top[2].button(run_label, key="ai_run", type="primary",
                      use_container_width=True):
-        text_for_review, fetch_err = review_text, None
-        if need_fetch:
-            with st.spinner("Загружаю текст по ссылке…"):
-                fetched, _kind, fetch_err = C.fetch_post_link_text(post)
-            if not fetch_err:
-                ext_store[key] = fetched
-                text_for_review = fetched
-        if fetch_err:
-            st.error(fetch_err)  # без rerun — чтобы сообщение осталось
-        else:
-            with st.spinner("Проверяем нейросетью…"):
-                res = C.ai_review_post(data, post, text_override=text_for_review)
-            store[key] = {"hash": config_mod.content_hash(text_for_review),
-                          "res": res}
-            st.session_state.setdefault("ai_dec", {})[key] = {}  # сброс решений
-            if res.get("ok"):
-                st.session_state["ai_checked_count"] = \
-                    st.session_state.get("ai_checked_count", 0) + 1
-                C.persist_ai_cache()
-            st.rerun()
+        _ai_do_check(data, post, key, need_fetch, review_text, store, ext_store)
+
+    # автозапуск: пост-ссылку открыли из карточки кнопкой «Загрузить и проверить»
+    if st.session_state.get("ai_autorun") == key and key not in store:
+        st.session_state.pop("ai_autorun", None)
+        _ai_do_check(data, post, key, need_fetch, review_text, store, ext_store)
 
     # пояснение для постов-ссылок
     if is_external:
