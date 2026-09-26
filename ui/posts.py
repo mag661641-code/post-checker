@@ -450,8 +450,8 @@ def _post_card(data: C.AppData, by_key: dict, sel_key: tuple) -> None:
         # смысловая проверка нейросетью — на отдельном экране
         st.divider()
         st.markdown("**Замечания нейросети** 🤖")
-        only = text_checks._content_only_link(post)
-        is_external = bool(only and only[0] in ("gdoc", "dzen"))
+        only = text_checks._content_link(post)
+        is_external = only is not None
         if C.get_ai_key():
             n_ai = _ai_pending_count(sel_key)
             hint = f" · {n_ai} на рассмотрении" if n_ai else ""
@@ -675,9 +675,9 @@ def _ai_page(data: C.AppData, post: PostRecord, period) -> None:
     meta = " · ".join(x for x in (C.fmt_date_compact(post.date) or "без даты",
                                   post.brand, rubric) if x)
 
-    # пост, где в ячейке по сути только ссылка на документ/статью
-    only = text_checks._content_only_link(post)
-    is_external = bool(only and only[0] in ("gdoc", "dzen"))
+    # пост со ссылкой на внешний документ/статью (обычной или как гиперссылка-анкор)
+    only = text_checks._content_link(post)
+    is_external = only is not None
     ext_store = st.session_state.setdefault("ai_ext_text", {})
     review_text = ext_store.get(key, post.text)
 

@@ -48,6 +48,28 @@ def _content_only_link(post: PostRecord) -> tuple[str, str] | None:
     return "other", cand[0]
 
 
+def _content_link(post: PostRecord) -> tuple[str, str] | None:
+    """Ссылка на внешний документ, который можно прочитать (Google Документ или
+    статья Дзена), если она есть у поста. Возвращает (тип, url), иначе None.
+
+    В отличие от _content_only_link НЕ требует, чтобы в ячейке «Пост» не было
+    текста: ссылка засчитывается и когда она вставлена как обычная ссылка, и
+    когда она «спрятана» в гиперссылке-анкоре (заголовок статьи со ссылкой), и
+    когда стоит в колонке «Ссылка». Нужно, чтобы читать документ по ссылке даже
+    если в таблице виден только заголовок статьи."""
+    cand = list(_URL_RE.findall(post.text or ""))
+    cand += [u for u in getattr(post, "text_links", []) if u]
+    cand += [s.get("link", "") for s in post.socials if s.get("link")]
+    cand = [u for u in cand if u]
+    if not cand:
+        return None
+    kinds = [N.classify_link(u) for u in cand]
+    for pref in ("gdoc", "dzen"):
+        if pref in kinds:
+            return pref, cand[kinds.index(pref)]
+    return None
+
+
 def _link_only_issue(post: PostRecord, code: str, kind: str, url: str) -> Issue:
     d = N.link_domain(url) or "ссылка"
     if kind == "video":

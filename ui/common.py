@@ -330,9 +330,12 @@ def _attach_text_links(posts: list[PostRecord]) -> None:
     except Exception:  # noqa: BLE001
         return
     for p in posts:
-        for u in (links_by_sheet.get(p.sheet, {}) or {}).get(p.row, []) or []:
-            if u not in p.text_links:
-                p.text_links.append(u)
+        by_row = links_by_sheet.get(p.sheet, {}) or {}
+        rows = p.raw_rows or [p.row]
+        for r in rows:
+            for u in by_row.get(r, []) or []:
+                if u not in p.text_links:
+                    p.text_links.append(u)
 
 
 def _site_resolved_keys(posts: list[PostRecord], cfg: dict) -> set[tuple]:
@@ -806,7 +809,7 @@ def fetch_post_link_text(post: PostRecord) -> tuple[str, str, Optional[str]]:
 
     Возвращает (текст, тип, ошибка). тип: gdoc / dzen / other."""
     from checker import text_checks, content_fetch
-    only = text_checks._content_only_link(post)
+    only = text_checks._content_link(post)
     if not only:
         return "", "", "У поста нет ссылки на документ или статью."
     _, url = only
