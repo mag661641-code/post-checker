@@ -453,7 +453,11 @@ def available_months(data: AppData) -> list[tuple[int, int, int]]:
 
 
 def ensure_period(data: AppData) -> None:
-    """Задать месяц по умолчанию (текущий по МСК или ближайший с постами)."""
+    """Задать месяц по умолчанию.
+
+    Приоритет — месяц с ближайшим будущим постом (сегодня или позже): заходишь и
+    сразу видишь тот, что скоро выходит, даже если он в следующем месяце. Если
+    будущих постов нет — показываем текущий месяц (или ближайший с постами)."""
     if "period" in st.session_state:
         return
     months = [(y, m) for (y, m, _) in available_months(data)]
@@ -463,6 +467,23 @@ def ensure_period(data: AppData) -> None:
         st.session_state["period"] = cur
         st.session_state["period_note"] = ""
         return
+
+    # ближайший будущий пост (сегодня или позже) — открываем его месяц
+    future = [p.date for p in data.posts if p.date and p.date >= today]
+    if future:
+        nearest_post = min(future)
+        target = (nearest_post.year, nearest_post.month)
+        st.session_state["period"] = target
+        if target == cur:
+            st.session_state["period_note"] = ""
+        else:
+            st.session_state["period_note"] = (
+                f"На {fmt_month_lower(*cur)} ближайших постов нет, "
+                f"показан {fmt_month_lower(*target)} — с ближайшим постом "
+                f"{fmt_date_short(nearest_post)}.")
+        return
+
+    # будущих постов нет — прежнее поведение
     if cur in months:
         st.session_state["period"] = cur
         st.session_state["period_note"] = ""
