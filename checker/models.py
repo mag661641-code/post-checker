@@ -79,6 +79,7 @@ class PostRecord:
     socials: list[dict] = field(default_factory=list)  # {social, link, row}
     raw_rows: list[int] = field(default_factory=list)
     text_links: list[str] = field(default_factory=list)  # гиперссылки внутри ячейки «Пост» (анкоры)
+    date_col: Optional[int] = None  # индекс колонки даты (0-based) для записи в таблицу
 
     @property
     def links(self) -> list[str]:

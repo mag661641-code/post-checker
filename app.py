@@ -7,7 +7,7 @@ from __future__ import annotations
 import streamlit as st
 
 from ui import common as C
-from ui import posts, holidays, publications, settings
+from ui import posts, holidays, publications, planning, settings
 
 C.page_config()
 C.inject_theme_css()
@@ -25,6 +25,8 @@ C.sidebar()
 nav = st.navigation([
     st.Page(posts.render, title="Проверка постов",
             url_path="posts", default=True),
+    st.Page(planning.render, title="Планирование",
+            url_path="planning"),
     st.Page(holidays.render, title="Обязательные праздники",
             url_path="holidays"),
     st.Page(publications.render, title="Проверка публикаций",

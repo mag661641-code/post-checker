@@ -300,7 +300,7 @@ def _load_brand_sheet(ws, brand: str) -> tuple[list[PostRecord], list[dict]]:
                 sheet=brand, row=excel_row, brand=brand,
                 date=parsed_date, date_note=date_note, post_type=ptype,
                 text=str(raw_text) if has_text else "",
-                executor=executor, raw_rows=[excel_row],
+                executor=executor, raw_rows=[excel_row], date_col=date_col,
             )
             link_in_text = _cell_hyperlink(ws, excel_row, post_idx)
             if link_in_text:
