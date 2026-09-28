@@ -235,8 +235,7 @@ def render_planning(posts: pd.DataFrame, apply_changes=None, source_connected: b
         "locale": "ru",
         "firstDay": 1,
         "initialView": "dayGridMonth",
-        "headerToolbar": {"left": "prev,next today", "center": "title", "right": ""},
-        "buttonText": {"today": "Сегодня"},
+        "headerToolbar": {"left": "prev", "center": "title", "right": "next"},
         "height": "auto",            # весь месяц целиком, без прокрутки внутри
         "dayMaxEvents": 4,           # остальные — «+ещё N», по клику открывается список дня
         "moreLinkText": "ещё",
