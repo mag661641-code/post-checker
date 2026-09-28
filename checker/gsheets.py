@@ -140,37 +140,74 @@ def download_public(url_or_id: str) -> bytes:
     return data
 
 
-def fetch_text_links(url_or_id: str, sheet_title: str, info: Any) -> dict[int, list[str]]:
-    """Гиперссылки-анкоры внутри ячеек листа: {номер_строки_Excel: [uri, ...]}.
+# Поля ячеек с адресами ссылок. Богатый набор включает смарт-чип (значок
+# документа): его адрес Google держит НЕ в тексте и НЕ в hyperlink, а в
+# chipRuns[].chip.richLinkProperties.uri — без этого поля чип-ссылка на документ
+# теряется. Запасной набор — без chipRuns, на случай если версия API его не
+# знает и вернёт HTTP 400.
+_LINK_VALUES_RICH = ("hyperlink,userEnteredValue(formulaValue),"
+                     "chipRuns(startIndex,chip(richLinkProperties(uri))),"
+                     "textFormatRuns(format(link(uri))))")
+_LINK_VALUES_CORE = ("hyperlink,userEnteredValue(formulaValue),"
+                     "textFormatRuns(format(link(uri))))")
 
-    Собирает ссылки трёх видов, которые не видны при выгрузке в .xlsx:
-    целую ссылку ячейки (hyperlink), формулу HYPERLINK(...) и частичные
-    ссылки на фрагменты текста (textFormatRuns → link.uri).
+
+def _cell_links(cell: dict) -> list[str]:
+    """Все адреса ссылок из ячейки. Приоритет: смарт-чип → hyperlink →
+    формула HYPERLINK(...) → частичные ссылки textFormatRuns."""
+    links: list[str] = []
+    # смарт-чип (значок документа) — адрес в chipRuns, приоритетнее всего
+    for cr in cell.get("chipRuns", []) or []:
+        uri = (((cr.get("chip") or {}).get("richLinkProperties") or {})
+               .get("uri") or "").strip()
+        if uri:
+            links.append(uri)
+    h = cell.get("hyperlink")
+    if h:
+        links.append(h)
+    fv = cell.get("userEnteredValue", {}).get("formulaValue")
+    if fv:
+        links.extend(re.findall(r'HYPERLINK\(\s*"([^"]+)"', fv, re.IGNORECASE))
+    for run in cell.get("textFormatRuns", []) or []:
+        uri = run.get("format", {}).get("link", {}).get("uri")
+        if uri:
+            links.append(uri)
+    return links
+
+
+def fetch_text_links(url_or_id: str, sheet_title: str, info: Any) -> dict[int, list[str]]:
+    """Ссылки внутри ячеек листа: {номер_строки_Excel: [uri, ...]}.
+
+    Собирает адреса, которые не видны при выгрузке в .xlsx: смарт-чип «значок
+    документа» (chipRuns), целую ссылку ячейки (hyperlink), формулу HYPERLINK(...)
+    и частичные ссылки на фрагменты текста (textFormatRuns → link.uri).
     """
     _, sheets = _clients(info)
     sid = extract_sheet_id(url_or_id)
-    res = sheets.spreadsheets().get(
-        spreadsheetId=sid, ranges=[sheet_title], includeGridData=True,
-        fields=("sheets(data(rowData(values(hyperlink,"
-                "userEnteredValue(formulaValue),"
-                "textFormatRuns(format(link(uri)))))))")).execute()
+
+    def _get(values_fields: str):
+        return sheets.spreadsheets().get(
+            spreadsheetId=sid, ranges=[sheet_title], includeGridData=True,
+            fields=f"sheets(data(rowData(values({values_fields}))))").execute()
+
+    try:
+        res = _get(_LINK_VALUES_RICH)
+    except Exception as e:  # noqa: BLE001
+        # если версия API не знает chipRuns — HTTP 400: повторяем без чипа,
+        # чтобы не потерять хотя бы hyperlink и textFormatRuns
+        status = getattr(getattr(e, "resp", None), "status", None)
+        if status == 400:
+            res = _get(_LINK_VALUES_CORE)
+        else:
+            raise
+
     out: dict[int, list[str]] = {}
     for sh in res.get("sheets", []):
         for data in sh.get("data", []):
             for i, rd in enumerate(data.get("rowData", [])):
                 links: list[str] = []
                 for cell in rd.get("values", []) or []:
-                    h = cell.get("hyperlink")
-                    if h:
-                        links.append(h)
-                    fv = cell.get("userEnteredValue", {}).get("formulaValue")
-                    if fv:
-                        links.extend(re.findall(r'HYPERLINK\(\s*"([^"]+)"', fv,
-                                                re.IGNORECASE))
-                    for run in cell.get("textFormatRuns", []) or []:
-                        uri = run.get("format", {}).get("link", {}).get("uri")
-                        if uri:
-                            links.append(uri)
+                    links.extend(_cell_links(cell))
                 if links:
                     out[i + 1] = links
     return out
