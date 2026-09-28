@@ -291,19 +291,30 @@ def _view_posts(data: C.AppData, base, period) -> None:
         sr[1].pills("Статус", ["Все", "Готово", "Выложено"],
                     selection_mode="single", key="flt_status",
                     label_visibility="collapsed")
+    # «с сегодняшнего дня» имеет смысл только в текущем месяце
+    today = C.moscow_today()
+    is_current_month = isinstance(period, tuple) and period == (today.year, today.month)
+    st.session_state.setdefault("flt_upcoming", True)
     with f[2]:
         st.toggle("Только с замечаниями", key="flt_only")
+        if is_current_month:
+            st.toggle("С сегодняшнего дня", key="flt_upcoming",
+                      help="Скрыть посты, которые в этом месяце уже прошли — "
+                           "список начнётся с ближайшей даты")
 
     if _filters_active():
         st.button("Сбросить фильтры", on_click=_reset_filters, key="reset_flt")
 
-    # --- список постов (с учётом уровня и «только с замечаниями») ---
+    # --- список постов (с учётом уровня, «только с замечаниями» и «с сегодня») ---
     only = st.session_state.get("flt_only", True)
+    upcoming_only = is_current_month and st.session_state.get("flt_upcoming", True)
     disp = []
     for p, iss in base:
         if sev in _SEV_LEVEL and not any(i.level == _SEV_LEVEL[sev] for i in iss):
             continue
         if only and not iss:
+            continue
+        if upcoming_only and p.date and p.date < today:
             continue
         disp.append((p, iss))
 

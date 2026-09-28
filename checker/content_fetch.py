@@ -37,11 +37,16 @@ def _doc_id(url: str) -> str:
 def _doc_error(exc: Exception, sa: Any) -> str:
     from checker import gsheets
     s = str(exc).lower()
+    email = gsheets.sa_email(sa)
     if "404" in s or "not found" in s or "notfound" in s:
-        return "Google Документ не найден — проверьте ссылку."
+        # Drive отдаёт 404 и когда файл существует, но недоступен аккаунту —
+        # чаще всего документ статьи просто не расшарен на сервисный аккаунт
+        return (f"Документ недоступен (не найден или закрыт доступ). Проверьте "
+                f"ссылку и откройте доступ к самому документу для {email} "
+                "(права «Читатель») или сделайте его доступным по ссылке. "
+                "Реестр расшарен, а документ — отдельный файл со своим доступом.")
     if ("403" in s or "permission" in s or "forbidden" in s
             or "does not have access" in s):
-        email = gsheets.sa_email(sa)
         return (f"Нет доступа к документу. Откройте к нему доступ для {email} "
                 "(права «Читатель») или сделайте документ доступным по ссылке.")
     if "export" in s or "not exportable" in s or "only exportable" in s:
