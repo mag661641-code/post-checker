@@ -26,6 +26,26 @@ def _brand_book() -> bytes:
     return buf.getvalue()
 
 
+def test_generate_slots_weekdays_types_holidays():
+    from ui.planning_schedule import generate_slots
+    rules = {"СМУ": {"weekdays": [0, 2, 4],
+                     "types": ["Информационный", "Развлекательный"],
+                     "skip_holidays": True}}
+    holiday = dt.date(2026, 10, 7)  # среда
+    slots = generate_slots(rules, 2026, 10, {holiday})
+    # только пн/ср/пт
+    assert {s["date"].weekday() for s in slots} == {0, 2, 4}
+    # праздник пропущен
+    assert all(s["date"] != holiday for s in slots)
+    # рубрики чередуются по кругу
+    assert slots[0]["type"] == "Информационный"
+    assert slots[1]["type"] == "Развлекательный"
+    assert slots[2]["type"] == "Информационный"
+    # все слоты — проекта СМУ, id уникальны
+    assert all(s["project"] == "СМУ" for s in slots)
+    assert len({s["id"] for s in slots}) == len(slots)
+
+
 def test_loader_sets_date_col():
     lw = L.load_workbook(_brand_book())
     posts = lw.posts.get("МПЭ", [])

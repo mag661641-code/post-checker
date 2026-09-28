@@ -58,6 +58,14 @@ def render() -> None:
 
     df = pd.DataFrame(rows, columns=["id", "date", "project", "type", "title"])
 
+    # --- режим: готовый календарь или составление графика по правилам ---
+    mode = st.radio("Режим", ["Календарь", "Составить график"],
+                    horizontal=True, label_visibility="collapsed", key="plan_mode")
+    if mode == "Составить график":
+        from ui import planning_schedule as PS
+        PS.render(data, df, source_connected)
+        return
+
     def _apply(changes: list[dict]) -> bool:
         """Записать переносы в таблицу. True — если всё записалось.
 
