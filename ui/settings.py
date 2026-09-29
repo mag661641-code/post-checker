@@ -17,8 +17,8 @@ def render() -> None:
     (st.success if persistent else st.warning)(status)
 
     tabs = st.tabs(["🔗 Источник данных", "🏷 Бренды", "✅ Проверки",
-                    "📚 Словари", "🤖 Нейросеть", "🙈 Скрытые замечания",
-                    "💾 Резервная копия"])
+                    "📚 Словари", "🤖 Нейросеть", "🔍 Дубли идей",
+                    "🖼 Картинки", "🙈 Скрытые замечания", "💾 Резервная копия"])
     with tabs[0]:
         _source()
     with tabs[1]:
@@ -30,9 +30,159 @@ def render() -> None:
     with tabs[4]:
         _ai_settings()
     with tabs[5]:
-        _ignored()
+        _dedup_settings()
     with tabs[6]:
+        _images_settings()
+    with tabs[7]:
+        _ignored()
+    with tabs[8]:
         _backup()
+
+
+def _col_letter(idx: int) -> str:
+    """0-based индекс столбца → буква (0→A, 2→C, 10→K)."""
+    if idx is None or idx < 0:
+        return "—"
+    s, n = "", idx + 1
+    while n:
+        n, r = divmod(n - 1, 26)
+        s = chr(65 + r) + s
+    return s
+
+
+def _dedup_settings() -> None:
+    d = config_mod.load_dedup()
+    st.subheader("Проверка дублей идей")
+    st.caption("Ищет повторяющиеся темы на отдельном листе идей. Столбцы задаются "
+               "буквами, как в таблице (C, K …).")
+
+    c1, c2, c3 = st.columns(3)
+    sheet = c1.text_input("Лист с идеями", value=d.get("sheet", "Идеи"),
+                          key="dd_sheet")
+    idea_letter = c2.text_input("Столбец идеи", value=_col_letter(d["col_idea"]),
+                                key="dd_idea", help="Например C")
+    pub_letter = c3.text_input(
+        "Столбец «Выложено»",
+        value=_col_letter(d["col_published"]) if d["col_published"] >= 0 else "",
+        key="dd_pub", help="Пусто = не учитывать статус публикации")
+
+    row_start = st.number_input("Данные начинаются со строки", min_value=1,
+                                value=int(d.get("row_start", 1)) + 1,
+                                key="dd_row") - 1
+    max_len = st.number_input("Пропускать тексты длиннее (символов)",
+                              min_value=50, value=int(d.get("max_idea_length", 400)),
+                              key="dd_maxlen")
+
+    st.markdown("**Пороги по словам** (0..1)")
+    l1, l2 = st.columns(2)
+    dup = l1.slider("Дубль", 0.0, 1.0, float(d.get("dup_limit", 0.70)), 0.01,
+                    key="dd_dup")
+    sim = l2.slider("Похоже", 0.0, 1.0, float(d.get("sim_limit", 0.50)), 0.01,
+                    key="dd_sim")
+
+    use_sem = st.toggle("Смысловая проверка (Gemini)",
+                        value=bool(d.get("use_semantic", True)), key="dd_sem")
+    s1, s2 = st.columns(2)
+    sem_dup = s1.slider("Смысл: дубль", 0.0, 1.0,
+                        float(d.get("sem_dup_limit", 0.90)), 0.01, key="dd_semdup")
+    sem_sim = s2.slider("Смысл: похоже", 0.0, 1.0,
+                        float(d.get("sem_sim_limit", 0.85)), 0.01, key="dd_semsim")
+
+    if st.button("💾 Сохранить", key="dd_save", type="primary"):
+        from checker import dedup
+        try:
+            col_idea = dedup.letter_to_index(idea_letter)
+            col_pub = (dedup.letter_to_index(pub_letter)
+                       if pub_letter.strip() else -1)
+        except ValueError as e:
+            st.error(str(e))
+            return
+        config_mod.save_dedup({
+            "sheet": sheet.strip() or "Идеи",
+            "col_idea": col_idea, "col_published": col_pub,
+            "row_start": int(row_start), "max_idea_length": int(max_len),
+            "dup_limit": dup, "sim_limit": sim,
+            "sem_dup_limit": sem_dup, "sem_sim_limit": sem_sim,
+            "use_semantic": use_sem,
+            "embed_model": d.get("embed_model", "gemini-embedding-001"),
+            "embed_dims": d.get("embed_dims", 768),
+        })
+        C.persist_all()
+        st.toast("Настройки дублей сохранены")
+        st.rerun()
+
+
+def _images_settings() -> None:
+    cfg = config_mod.load_images()
+    sa = C.get_service_account()
+    st.subheader("Проверка картинок отгрузок")
+    if sa:
+        st.caption("Дайте роботу доступ (Читатель) к папкам Диска. Почта робота:")
+        st.code(gsheets.sa_email(sa), language=None)
+    else:
+        st.warning("Не добавлен ключ сервисного аккаунта — картинки на Диске "
+                   "проверить нельзя. Добавьте секрет `gcp_service_account_json`.")
+
+    g1, g2 = st.columns(2)
+    max_kb = g1.number_input("Лимит веса файла (кб)", min_value=10,
+                             value=int(cfg.get("max_kb", 150)), key="im_maxkb")
+    fuzzy = g2.number_input("Порог «похожего» имени (символов)", min_value=1,
+                            max_value=10, value=int(cfg.get("fuzzy_max_diff", 3)),
+                            key="im_fuzzy")
+
+    st.markdown("**Бренды** (folder_id — ID папки из ссылки "
+                "`drive.google.com/drive/folders/ЭТОТ_ID`; пусто = пропустить)")
+    new_brands: dict = {}
+    ok = True
+    for brand, b in cfg["brands"].items():
+        with st.expander(f"Бренд {brand}", expanded=not (b.get("folder_id") or "")):
+            c1, c2, c3 = st.columns(3)
+            sheet = c1.text_input("Лист", value=b.get("sheet", brand),
+                                  key=f"im_{brand}_sheet")
+            name_col = c2.text_input("Столбец имени", value=b.get("name_col", "O"),
+                                     key=f"im_{brand}_name", help="Например O или I")
+            first_row = c3.number_input("Первая строка данных", min_value=1,
+                                        value=int(b.get("first_data_row", 2)),
+                                        key=f"im_{brand}_row")
+            folder = st.text_input("folder_id папки Диска",
+                                   value=b.get("folder_id", ""),
+                                   key=f"im_{brand}_folder")
+            c4, c5 = st.columns(2)
+            jpg_col = c4.text_input("Столбец ссылки jpg (сайт)",
+                                    value=b.get("jpg_url_col", ""),
+                                    key=f"im_{brand}_jpg",
+                                    help="Пусто = сайт не проверять")
+            webp_col = c5.text_input("Столбец ссылки webp (сайт)",
+                                     value=b.get("webp_url_col", ""),
+                                     key=f"im_{brand}_webp")
+            c6, c7 = st.columns(2)
+            req_jpg = c6.checkbox("Нужен .jpg", value=bool(b.get("require_jpg", True)),
+                                  key=f"im_{brand}_rjpg")
+            req_webp = c7.checkbox("Нужен .webp", value=bool(b.get("require_webp", True)),
+                                   key=f"im_{brand}_rwebp")
+            # проверить буквы столбцов
+            from checker import dedup
+            for label, val in (("имени", name_col), ("jpg", jpg_col),
+                               ("webp", webp_col)):
+                if val.strip():
+                    try:
+                        dedup.letter_to_index(val)
+                    except ValueError:
+                        st.error(f"Неверная буква столбца {label}: «{val}».")
+                        ok = False
+            new_brands[brand] = {
+                "sheet": sheet.strip() or brand, "name_col": name_col.strip(),
+                "first_data_row": int(first_row), "folder_id": folder.strip(),
+                "jpg_url_col": jpg_col.strip(), "webp_url_col": webp_col.strip(),
+                "require_jpg": req_jpg, "require_webp": req_webp,
+            }
+
+    if st.button("💾 Сохранить", key="im_save", type="primary", disabled=not ok):
+        config_mod.save_images({"max_kb": int(max_kb), "fuzzy_max_diff": int(fuzzy),
+                                "brands": new_brands})
+        C.persist_all()
+        st.toast("Настройки картинок сохранены")
+        st.rerun()
 
 
 def _source() -> None:

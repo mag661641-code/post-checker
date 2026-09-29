@@ -18,6 +18,43 @@ WHITELIST_PATH = CONFIG_DIR / "whitelist.txt"
 IGNORED_PATH = CONFIG_DIR / "ignored.json"
 MANUAL_PATH = CONFIG_DIR / "manual.json"
 SOURCE_PATH = CONFIG_DIR / "source.json"
+DEDUP_PATH = CONFIG_DIR / "dedup.json"
+IMAGES_PATH = CONFIG_DIR / "images.json"
+
+# Настройки проверки картинок отгрузок. Столбцы — БУКВАМИ (как в таблице).
+# folder_id — ID папки Google Диска бренда (пусто = проверку бренда пропустить).
+_IMAGES_DEFAULT = {
+    "max_kb": 150,           # тяжелее — предупреждение
+    "fuzzy_max_diff": 3,     # порог «похожего» имени (Левенштейн)
+    "brands": {
+        "СМУ": {"sheet": "СМУ", "name_col": "O", "first_data_row": 2,
+                "folder_id": "", "jpg_url_col": "", "webp_url_col": "",
+                "require_jpg": True, "require_webp": True},
+        "ИМП": {"sheet": "ИМП", "name_col": "I", "first_data_row": 2,
+                "folder_id": "", "jpg_url_col": "", "webp_url_col": "",
+                "require_jpg": True, "require_webp": True},
+        "МПЭ": {"sheet": "МПЭ", "name_col": "O", "first_data_row": 2,
+                "folder_id": "", "jpg_url_col": "", "webp_url_col": "",
+                "require_jpg": True, "require_webp": True},
+    },
+}
+
+# Настройки проверки дублей идей. Столбцы 0-based (C=2, K=10). row_start=1 —
+# данные со 2-й строки. Пороги — как в исходном Apps Script.
+_DEDUP_DEFAULT = {
+    "sheet": "Идеи",
+    "col_idea": 2,             # C — «Идея / Тема»
+    "col_published": 10,       # K — «Выложено (мес)»; -1 = не учитывать
+    "row_start": 1,            # 0-based индекс первой строки данных
+    "max_idea_length": 400,
+    "dup_limit": 0.70,
+    "sim_limit": 0.50,
+    "sem_dup_limit": 0.90,
+    "sem_sim_limit": 0.85,
+    "use_semantic": True,
+    "embed_model": "gemini-embedding-001",
+    "embed_dims": 768,
+}
 
 _SOURCE_DEFAULT = {
     "method": "service_account",   # service_account | public
@@ -161,6 +198,37 @@ def save_source(data: dict[str, Any]) -> None:
     merged = dict(_SOURCE_DEFAULT)
     merged.update(data)
     _write_json(SOURCE_PATH, merged)
+
+
+def load_dedup() -> dict[str, Any]:
+    data = dict(_DEDUP_DEFAULT)
+    if DEDUP_PATH.exists():
+        try:
+            data.update(_read_json(DEDUP_PATH))
+        except Exception:  # noqa: BLE001
+            pass
+    return data
+
+
+def save_dedup(data: dict[str, Any]) -> None:
+    merged = dict(_DEDUP_DEFAULT)
+    merged.update(data)
+    _write_json(DEDUP_PATH, merged)
+
+
+def load_images() -> dict[str, Any]:
+    from copy import deepcopy
+    data = deepcopy(_IMAGES_DEFAULT)
+    if IMAGES_PATH.exists():
+        try:
+            data.update(_read_json(IMAGES_PATH))
+        except Exception:  # noqa: BLE001
+            pass
+    return data
+
+
+def save_images(data: dict[str, Any]) -> None:
+    _write_json(IMAGES_PATH, data)
 
 
 def save_brands(data: dict[str, Any]) -> None:

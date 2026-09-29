@@ -46,6 +46,37 @@ def test_generate_slots_weekdays_types_holidays():
     assert len({s["id"] for s in slots}) == len(slots)
 
 
+def test_generate_slots_extra_posts():
+    from ui.planning_schedule import generate_slots
+    # основные посты — только по пятницам; «Поступление» дополнительно по вторникам
+    rules = {"АПС": {"weekdays": [4], "types": ["Информационный"],
+                     "skip_holidays": True,
+                     "extra": [{"type": "Поступление", "weekdays": [1]}]}}
+    slots = generate_slots(rules, 2026, 10, set())
+    main = [s for s in slots if s["kind"] == "main"]
+    extra = [s for s in slots if s["kind"] == "extra"]
+    # основные — только пятницы
+    assert {s["date"].weekday() for s in main} == {4}
+    # дополнительные — только вторники, тип «Поступление»
+    assert {s["date"].weekday() for s in extra} == {1}
+    assert all(s["type"] == "Поступление" for s in extra)
+    # id всех слотов уникальны (основной и доп. в один день не конфликтуют)
+    assert len({s["id"] for s in slots}) == len(slots)
+
+
+def test_generate_slots_main_and_extra_same_day():
+    from ui.planning_schedule import generate_slots
+    # основные по пятницам + доп. «Поступление» тоже по пятницам → два поста в день
+    rules = {"СМУ": {"weekdays": [4], "types": ["Информационный"],
+                     "skip_holidays": False,
+                     "extra": [{"type": "Поступление", "weekdays": [4]}]}}
+    slots = generate_slots(rules, 2026, 10, set())
+    fridays = {s["date"] for s in slots}
+    for d in fridays:
+        kinds = sorted(s["kind"] for s in slots if s["date"] == d)
+        assert kinds == ["extra", "main"]  # оба поста в один день
+
+
 def test_loader_sets_date_col():
     lw = L.load_workbook(_brand_book())
     posts = lw.posts.get("МПЭ", [])

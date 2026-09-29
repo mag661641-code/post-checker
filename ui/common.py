@@ -274,6 +274,10 @@ def pull_settings() -> None:
         config_mod.save_manual(bundle["manual"])
     if "source" in bundle:
         config_mod.save_source(bundle["source"])
+    if "dedup" in bundle:
+        config_mod.save_dedup(bundle["dedup"])
+    if "images" in bundle:
+        config_mod.save_images(bundle["images"])
     cached_base_checks.clear()
     cached_spell.clear()
     clear_source_cache()
@@ -295,6 +299,8 @@ def persist_all() -> bool:
             "ignored": config_mod.load_ignored(),
             "manual": config_mod.load_manual(),
             "source": config_mod.load_source(),
+            "dedup": config_mod.load_dedup(),
+            "images": config_mod.load_images(),
         })
         return True
     except Exception:  # noqa: BLE001

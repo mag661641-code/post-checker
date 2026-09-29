@@ -7,7 +7,7 @@ from __future__ import annotations
 import streamlit as st
 
 from ui import common as C
-from ui import posts, holidays, publications, planning, settings
+from ui import posts, holidays, publications, planning, settings, dedup, images
 
 C.page_config()
 C.inject_theme_css()
@@ -27,6 +27,10 @@ nav = st.navigation([
             url_path="posts", default=True),
     st.Page(planning.render, title="Планирование",
             url_path="planning"),
+    st.Page(dedup.render, title="Дубли идей",
+            url_path="dedup"),
+    st.Page(images.render, title="Картинки отгрузок",
+            url_path="images"),
     st.Page(holidays.render, title="Обязательные праздники",
             url_path="holidays"),
     st.Page(publications.render, title="Проверка публикаций",
